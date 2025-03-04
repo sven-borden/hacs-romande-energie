@@ -1,4 +1,4 @@
-"""Sensor platform for Romande Énergie."""
+"""Sensor platform for Romande Energie."""
 import logging
 import aiohttp
 from datetime import date, timedelta
@@ -14,14 +14,14 @@ async def async_setup_entry(hass, entry, async_add_entities):
     async_add_entities([RomandeEnergieConsumptionSensor(username, password)], True)
 
 class RomandeEnergieConsumptionSensor(Entity):
-    """Representation of a Romande Énergie Consumption sensor."""
+    """Representation of a Romande Energie Consumption sensor."""
 
     def __init__(self, username: str, password: str):
         """Initialize the sensor."""
         self._username = username
         self._password = password
         self._state = None
-        self._attr_name = "Romande Énergie Daily Consumption"
+        self._attr_name = "Romande Energie Daily Consumption"
 
     @property
     def name(self):
@@ -48,4 +48,4 @@ class RomandeEnergieConsumptionSensor(Entity):
                 consumption_data = await async_get_consumption(session, contract_id, from_date, to_date)
                 self._state = consumption_data.get("total", 0)
             except Exception as err:
-                _LOGGER.error("Error updating Romande Énergie sensor: %s", err)
+                _LOGGER.error("Error updating Romande Energie sensor: %s", err)

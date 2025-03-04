@@ -1,4 +1,4 @@
-"""Config flow for Romande Énergie integration."""
+"""Config flow for Romande Energie integration."""
 import logging
 import voluptuous as vol
 
@@ -11,7 +11,7 @@ from . import DOMAIN
 _LOGGER = logging.getLogger(__name__)
 
 class RomandeEnergieConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    """Handle a config flow for Romande Énergie."""
+    """Handle a config flow for Romande Energie."""
 
     VERSION = 1
 
@@ -22,7 +22,7 @@ class RomandeEnergieConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             # Here you can validate the user_input, e.g., try logging in
             # If successful, create the entry
-            return self.async_create_entry(title="Romande Énergie", data=user_input)
+            return self.async_create_entry(title="Romande Energie", data=user_input)
 
         schema = vol.Schema(
             {
@@ -41,7 +41,7 @@ class RomandeEnergieConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class RomandeEnergieOptionsFlowHandler(config_entries.OptionsFlow):
-    """Handle an options flow for Romande Énergie."""
+    """Handle an options flow for Romande Energie."""
 
     def __init__(self, config_entry):
         """Initialize the options flow."""

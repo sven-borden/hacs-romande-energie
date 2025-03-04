@@ -1,6 +1,6 @@
 {
   "domain": "romande_energie",
-  "name": "Romande Énergie",
+  "name": "Romande Energie",
   "config_flow": true,
   "documentation": "https://github.com/sven-borden/hacs-romande-energie/blob/main/README.md",
   "requirements": [],

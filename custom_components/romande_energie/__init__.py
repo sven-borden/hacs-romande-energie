@@ -1,4 +1,4 @@
-"""Romande Énergie Custom Integration."""
+"""Romande Energie Custom Integration."""
 import logging
 import asyncio
 import aiohttp
