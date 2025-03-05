@@ -1,78 +1,111 @@
-"""Romande Energie Custom Integration."""
-import logging
+"""The Romande Energie integration."""
 import asyncio
-import aiohttp
+import logging
+from datetime import timedelta
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+
+from .api import RomandeEnergieApiClient
+from .const import (
+    DOMAIN,
+    CONF_USERNAME,
+    CONF_PASSWORD,
+    DEFAULT_SCAN_INTERVAL,
+)
 
 _LOGGER = logging.getLogger(__name__)
-DOMAIN = "romande_energie"
+
 PLATFORMS = ["sensor"]
 
+
 async def async_setup(hass: HomeAssistant, config: dict):
-    """Set up integration from configuration.yaml (if used)."""
+    """Set up the Romande Energie component."""
     hass.data.setdefault(DOMAIN, {})
     return True
 
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
-    """Set up integration from the config flow."""
-    hass.data.setdefault(DOMAIN, {})
-    # Load platforms (e.g., sensor) from the config entry
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    """Set up Romande Energie from a config entry."""
+    username = entry.data[CONF_USERNAME]
+    password = entry.data[CONF_PASSWORD]
+    
+    session = async_get_clientsession(hass)
+    api_client = RomandeEnergieApiClient(username, password, session)
+    
+    # Test the connection
+    if not await api_client.login():
+        raise ConfigEntryNotReady("Failed to connect to Romande Energie API")
+    
+    # Define update interval (allow override through options)
+    update_interval = timedelta(
+        seconds=entry.options.get("scan_interval", DEFAULT_SCAN_INTERVAL.total_seconds())
+    )
+    
+    async def async_update_data():
+        """Fetch data from API."""
+        try:
+            # Get daily consumption
+            today = datetime.now().strftime("%Y-%m-%d")
+            yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+            daily_data = await api_client.get_electricity_consumption(
+                from_date=yesterday, to_date=today
+            )
+            
+            # Get monthly consumption
+            first_day = datetime.now().replace(day=1).strftime("%Y-%m-%d")
+            monthly_data = await api_client.get_electricity_consumption(
+                from_date=first_day, to_date=today
+            )
+            
+            if not daily_data or not monthly_data:
+                raise UpdateFailed("Failed to fetch consumption data")
+                
+            return {
+                "daily": daily_data,
+                "monthly": monthly_data,
+            }
+        except Exception as err:
+            raise UpdateFailed(f"Error communicating with API: {err}")
+
+    coordinator = DataUpdateCoordinator(
+        hass,
+        _LOGGER,
+        name=DOMAIN,
+        update_method=async_update_data,
+        update_interval=update_interval,
+    )
+
+    # Fetch initial data
+    await coordinator.async_config_entry_first_refresh()
+
+    hass.data[DOMAIN][entry.entry_id] = {
+        "api_client": api_client,
+        "coordinator": coordinator,
+    }
+
+    for platform in PLATFORMS:
+        hass.async_create_task(
+            hass.config_entries.async_forward_entry_setup(entry, platform)
+        )
+
     return True
+
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
     """Unload a config entry."""
-    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    return unload_ok
-
-async def async_login(session: aiohttp.ClientSession, username: str, password: str):
-    """Authenticate and return tokens."""
-    url = "https://api.espace-client.romande-energie.ch/api/login/"
-    payload = {"username": username, "password": password}
-    headers = {
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-    }
-
-    async with session.post(url, json=payload, headers=headers) as resp:
-        resp.raise_for_status()
-        data = await resp.json()
-        _LOGGER.debug("Login response: %s", data)
-        return data.get("access"), data.get("refresh")
-
-async def async_get_session(session: aiohttp.ClientSession, access_token: str):
-    """Retrieve session details."""
-    url = "https://api.espace-client.romande-energie.ch/users/session/"
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Accept": "application/json",
-    }
-    async with session.get(url, headers=headers) as resp:
-        resp.raise_for_status()
-        data = await resp.json()
-        _LOGGER.debug("Session response: %s", data)
-        return data
-
-async def async_get_contracts(session: aiohttp.ClientSession, session_id: str):
-    """Retrieve contracts for a given session."""
-    url = f"https://api.espace-client.romande-energie.ch/accounts/{session_id}/contracts/"
-    headers = {"Accept": "application/json"}
-    async with session.get(url, headers=headers) as resp:
-        resp.raise_for_status()
-        data = await resp.json()
-        _LOGGER.debug("Contracts response: %s", data)
-        return data
-
-async def async_get_consumption(session: aiohttp.ClientSession, contract_id: str, from_date: str, to_date: str):
-    """Fetch electricity consumption curves."""
-    url = (
-        f"https://api.espace-client.romande-energie.ch/contracts/"
-        f"{contract_id}/services/electricity/curves/?from_date={from_date}&to_date={to_date}"
+    unload_ok = all(
+        await asyncio.gather(
+            *[
+                hass.config_entries.async_forward_entry_unload(entry, platform)
+                for platform in PLATFORMS
+            ]
+        )
     )
-    headers = {"Accept": "application/json"}
-    async with session.get(url, headers=headers) as resp:
-        resp.raise_for_status()
-        data = await resp.json()
-        _LOGGER.debug("Consumption response: %s", data)
-        return data
+    if unload_ok:
+        hass.data[DOMAIN].pop(entry.entry_id)
+
+    return unload_ok

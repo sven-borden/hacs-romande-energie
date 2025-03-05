@@ -1,10 +1,12 @@
 {
   "domain": "romande_energie",
   "name": "Romande Energie",
-  "config_flow": true,
-  "documentation": "https://github.com/sven-borden/hacs-romande-energie/blob/main/README.md",
-  "requirements": [],
-  "dependencies": [],
   "codeowners": ["@sven-borden"],
-  "version": "0.0.1"
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/sven-borden/hacs-romande-energie",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/sven-borden/hacs-romande-energie/issues",
+  "requirements": [],
+  "version": "0.1.0"
 }
