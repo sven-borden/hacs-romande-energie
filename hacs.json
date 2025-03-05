@@ -1,11 +1,6 @@
 {
     "name": "Romande Energie",
-    "version": "1.0.0",
-    "slug": "romande_energie",
-    "url": "https://github.com/svenborden/hacs-romande-energie",
-    "issues": "https://github.com/svenborden/hacs-romande-energie/issues",
-    "license": "MIT",
     "homeassistant": "2023.1.0",
-    "render_readme": true,
+    "country": "CH",
     "content_in_root": false
 }
