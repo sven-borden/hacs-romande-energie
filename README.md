@@ -33,6 +33,12 @@ To configure the Romande Energie integration:
 
 Once configured, the integration will automatically retrieve and display your electricity consumption data in Home Assistant. You can create sensors to visualize this data on your dashboard.
 
+## Disclaimer
+
+This integration is not developed, endorsed, or supported by Romande Energie SA. It's an independent project created by community members to integrate Romande Energie's services with Home Assistant. Romande Energie is not responsible for this integration's functionality, and any issues or questions should be directed to this project's GitHub repository, not to Romande Energie's customer service.
+
+The names "Romande Energie" and related trademarks belong to Romande Energie SA and are used here for identification purposes only.
+
 ## Contributing
 
 Contributions are welcome! Please open an issue or submit a pull request for any enhancements or bug fixes.
