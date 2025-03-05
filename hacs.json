@@ -6,10 +6,8 @@
     "url": "https://github.com/svenborden/hacs-romande-energie",
     "issues": "https://github.com/svenborden/hacs-romande-energie/issues",
     "license": "MIT",
-    "requirements": [],
     "homeassistant": "2023.1.0",
-    "dependencies": [],
-    "codeowners": ["@sven-borden"],
-    "documentation": "https://github.com/svenborden/hacs-romande-energie/blob/main/README.md",
-    "support": "https://github.com/svenborden/hacs-romande-energie/issues"
-  }
+    "render_readme": true,
+    "content_in_root": false,
+    "iot_class": "cloud_polling"
+}
