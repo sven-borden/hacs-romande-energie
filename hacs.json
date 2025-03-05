@@ -9,7 +9,7 @@
     "requirements": [],
     "homeassistant": "2023.1.0",
     "dependencies": [],
-    "codeowners": ["@svenborden"],
+    "codeowners": ["@sven-borden"],
     "documentation": "https://github.com/svenborden/hacs-romande-energie/blob/main/README.md",
     "support": "https://github.com/svenborden/hacs-romande-energie/issues"
   }
