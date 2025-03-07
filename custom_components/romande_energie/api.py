@@ -52,8 +52,8 @@ class RomandeEnergieApiClient:
                 data = await response.json()
                 self.access_token = data.get("access")
                 self.refresh_token = data.get("refresh")
-                # Set expiration time (typically 1 hour from now)
-                self.token_expires_at = datetime.now() + timedelta(minutes=55)
+                # Set expiration time (2 hours from now for Romande Energie)
+                self.token_expires_at = datetime.now() + timedelta(minutes=115)
                 
                 _LOGGER.info("Login successful") # TODO debug
                 return True
@@ -123,7 +123,7 @@ class RomandeEnergieApiClient:
                 )
                 
                 if response.status != 200:
-                    _LOGGER.error(f"Get session failed with status code {response.status}")
+                    _LOGGER.error(f"Get session failed with status code {response.status} and headers {headers}")
                     return None
 
                 data = await response.json()
