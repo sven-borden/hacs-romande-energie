@@ -8,7 +8,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.helpers.entity import DeviceInfo
-from homeassistant.const import ENERGY_KILO_WATT_HOUR
+from homeassistant.const import UnitOfEnergy
 
 from .const import (
     DOMAIN,
@@ -45,7 +45,7 @@ class RomandeEnergieSensor(CoordinatorEntity, SensorEntity):
         self.sensor_type = sensor_type
         self._attr_unique_id = f"{entry.entry_id}_{sensor_type}"
         self._attr_name = f"Romande Energie {SENSOR_TYPES[sensor_type]['name']}"
-        self._attr_native_unit_of_measurement = ENERGY_KILO_WATT_HOUR
+        self._attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
         self._attr_icon = SENSOR_TYPES[sensor_type]['icon']
         self._attr_device_class = SENSOR_TYPES[sensor_type]['device_class']
         self._attr_state_class = SENSOR_TYPES[sensor_type]['state_class']
