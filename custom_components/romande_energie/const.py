@@ -35,6 +35,7 @@ DEFAULT_HEADERS = {
 # Sensor types
 SENSOR_TYPE_DAILY_CONSUMPTION = "daily_consumption"
 SENSOR_TYPE_MONTHLY_CONSUMPTION = "monthly_consumption"
+SENSOR_TYPE_LATEST_CONSUMPTION = "latest_consumption"
 
 SENSOR_TYPES = {
     SENSOR_TYPE_DAILY_CONSUMPTION: {
@@ -50,5 +51,12 @@ SENSOR_TYPES = {
         "unit": "kWh", 
         "device_class": "energy",
         "state_class": "total_increasing",
+    },
+    SENSOR_TYPE_LATEST_CONSUMPTION: {
+        "name": "Latest Consumption",
+        "icon": "mdi:flash",
+        "unit": "kWh",
+        "device_class": "energy", 
+        "state_class": "measurement",
     },
 }

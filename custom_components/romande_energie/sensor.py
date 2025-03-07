@@ -1,7 +1,7 @@
 """Sensor platform for Romande Energie integration."""
 import logging
 from typing import Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
@@ -15,6 +15,7 @@ from .const import (
     SENSOR_TYPES,
     SENSOR_TYPE_DAILY_CONSUMPTION,
     SENSOR_TYPE_MONTHLY_CONSUMPTION,
+    SENSOR_TYPE_LATEST_CONSUMPTION,  # Add this
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -64,37 +65,52 @@ class RomandeEnergieSensor(CoordinatorEntity, SensorEntity):
     @property
     def native_value(self) -> Optional[float]:
         """Return the state of the sensor."""
-        if not self.coordinator.data:
+        if not self.coordinator.data or "consumption" not in self.coordinator.data:
             return None
             
         try:
-            if self.sensor_type == SENSOR_TYPE_DAILY_CONSUMPTION:
-                daily_data = self.coordinator.data.get("daily", {})
-                consumption_values = daily_data.get("values", [])
-                
-                # Get today's consumption or sum of today's values
-                if consumption_values:
-                    # Filter for today's data points and sum them
-                    today = datetime.now().strftime("%Y-%m-%d")
-                    today_values = [
-                        float(point.get("value", 0)) 
-                        for point in consumption_values 
-                        if point.get("timestamp", "").startswith(today)
-                    ]
-                    return sum(today_values) if today_values else 0
+            consumption_data = self.coordinator.data["consumption"]
+            values = consumption_data.get("values", [])
+
+            if not values:
                 return 0
+                
+            if self.sensor_type == SENSOR_TYPE_DAILY_CONSUMPTION:
+                # Filter for today's data points and sum them
+                today = datetime.now().strftime("%Y-%m-%d")
+                today_values = [
+                    float(point.get("value", 0)) 
+                    for point in values 
+                    if point.get("timestamp", "").startswith(today)
+                ]
+                return sum(today_values) if today_values else 0
                     
             elif self.sensor_type == SENSOR_TYPE_MONTHLY_CONSUMPTION:
-                monthly_data = self.coordinator.data.get("monthly", {})
-                # Try to get the monthly total directly
-                if "total" in monthly_data:
-                    return float(monthly_data["total"])
+                # If we have a total in the API response, use it
+                if "total" in consumption_data and consumption_data["total"] is not None:
+                    return float(consumption_data["total"])
                 
-                # Or calculate from values
-                consumption_values = monthly_data.get("values", [])
-                if consumption_values:
-                    return sum(float(point.get("value", 0)) for point in consumption_values)
+                # Otherwise calculate monthly total from available values
+                # Get first day of current month
+                today = datetime.now()
+                first_day = today.replace(day=1).strftime("%Y-%m-")
+                
+                monthly_values = [
+                    float(point.get("value", 0)) 
+                    for point in values 
+                    if point.get("timestamp", "").startswith(first_day)
+                ]
+                return sum(monthly_values) if monthly_values else 0
+
+            elif self.sensor_type == SENSOR_TYPE_LATEST_CONSUMPTION:
+                # Get the most recent value
+                if values:
+                    # Sort by timestamp descending and take the first one
+                    sorted_values = sorted(values, key=lambda x: x.get("timestamp", ""), reverse=True)
+                    if sorted_values:
+                        return float(sorted_values[0].get("value", 0))
                 return 0
+                
         except (KeyError, ValueError, TypeError) as err:
             _LOGGER.error(f"Error calculating sensor value: {err}")
             return None
