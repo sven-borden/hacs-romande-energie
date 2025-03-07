@@ -33,7 +33,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     username = entry.data[CONF_USERNAME]
     password = entry.data[CONF_PASSWORD]
     
-    _LOGGER.info("Setting up Romande Energie integration for %s", username) # TODO debug
+    _LOGGER.debug("Setting up Romande Energie integration for %s", username)
     _LOGGER.info("Attempting initial connection to Romande Energie API")
     
     session = async_get_clientsession(hass)
