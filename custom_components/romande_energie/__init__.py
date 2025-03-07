@@ -33,7 +33,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     username = entry.data[CONF_USERNAME]
     password = entry.data[CONF_PASSWORD]
     
-    _LOGGER.debug("Setting up Romande Energie integration for %s", username)
+    _LOGGER.info("Setting up Romande Energie integration for %s", username) # TODO debug
     _LOGGER.info("Attempting initial connection to Romande Energie API")
     
     session = async_get_clientsession(hass)
@@ -52,19 +52,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     
     async def async_update_data():
         """Fetch data from API."""
-        _LOGGER.debug("Starting data update from Romande Energie API")
+        _LOGGER.info("Starting data update from Romande Energie API") # TODO debug
         try:
             # Get daily consumption
             today = datetime.now().strftime("%Y-%m-%d")
             yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-            _LOGGER.debug("Fetching daily consumption data for period %s to %s", yesterday, today)
+            _LOGGER.info("Fetching daily consumption data for period %s to %s", yesterday, today) # TODO debug
             daily_data = await api_client.get_electricity_consumption(
                 from_date=yesterday, to_date=today
             )
             
             # Get monthly consumption
             first_day = datetime.now().replace(day=1).strftime("%Y-%m-%d")
-            _LOGGER.debug("Fetching monthly consumption data for period %s to %s", first_day, today)
+            _LOGGER.info("Fetching monthly consumption data for period %s to %s", first_day, today) # TODO debug
             monthly_data = await api_client.get_electricity_consumption(
                 from_date=first_day, to_date=today
             )
@@ -73,7 +73,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                 _LOGGER.error("Failed to fetch consumption data: Empty response")
                 raise UpdateFailed("Failed to fetch consumption data")
             
-            _LOGGER.debug("Successfully retrieved consumption data")
+            _LOGGER.info("Successfully retrieved consumption data") # TODO debug
             return {
                 "daily": daily_data,
                 "monthly": monthly_data,

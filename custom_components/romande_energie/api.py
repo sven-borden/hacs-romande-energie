@@ -55,7 +55,7 @@ class RomandeEnergieApiClient:
                 # Set expiration time (typically 1 hour from now)
                 self.token_expires_at = datetime.now() + timedelta(minutes=55)
                 
-                _LOGGER.debug("Login successful")
+                _LOGGER.info("Login successful") # TODO debug
                 return True
                 
         except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError) as error:
@@ -88,7 +88,7 @@ class RomandeEnergieApiClient:
                 self.access_token = data.get("access")
                 self.token_expires_at = datetime.now() + timedelta(minutes=55)
                 
-                _LOGGER.debug("Token refresh successful")
+                _LOGGER.info("Token refresh successful") # TODO debug
                 return True
                 
         except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError) as error:
