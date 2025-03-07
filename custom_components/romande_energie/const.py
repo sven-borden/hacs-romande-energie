@@ -19,7 +19,13 @@ API_CONTRACTS_URL = f"{API_BASE_URL}/contracts"
 DEFAULT_HEADERS = {
     "Content-Type": "application/json",
     "Accept": "application/json",
+    "Connection": "keep-alive",
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 Edg/133.0.0.0",
+    "Origin": "https://espace-client.romande-energie.ch",
+    "Referer": "https://espace-client.romande-energie.ch/",
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-site",
 }
 
 # Sensor types
