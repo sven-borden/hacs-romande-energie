@@ -55,15 +55,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         _LOGGER.info("Starting data update from Romande Energie API") # TODO debug
         try:
             # Get daily consumption
-            today = datetime.now().strftime("%Y-%m-%d")
-            yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+            today = datetime.now().strftime("%Y-%m-%dT00:00:00Z")
+            yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%dT00:00:00Z")
             _LOGGER.info("Fetching daily consumption data for period %s to %s", yesterday, today) # TODO debug
             daily_data = await api_client.get_electricity_consumption(
                 from_date=yesterday, to_date=today
             )
             
             # Get monthly consumption
-            first_day = datetime.now().replace(day=1).strftime("%Y-%m-%d")
+            first_day = datetime.now().replace(day=1).strftime("%Y-%m-%dT00:00:00Z")
             _LOGGER.info("Fetching monthly consumption data for period %s to %s", first_day, today) # TODO debug
             monthly_data = await api_client.get_electricity_consumption(
                 from_date=first_day, to_date=today
