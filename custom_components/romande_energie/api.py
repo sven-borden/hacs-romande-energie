@@ -192,10 +192,10 @@ class RomandeEnergieApiClient:
             return None
 
     async def get_electricity_consumption(self, from_date=None, to_date=None):
-        """Get electricity consumption data."""
+        """Get electricity consumptiosn data."""
         if not self.contract_id:
             _LOGGER.debug("No contract ID available, retrieving contracts for user: %s", self.username)
-            contracts_data = await self.get_contracts()
+            _ = await self.get_contracts()
             if not self.contract_id:
                 _LOGGER.error("No contract ID found for user: %s", self.username)
                 return None
@@ -203,8 +203,8 @@ class RomandeEnergieApiClient:
         # Default to current month if dates not specified
         if not from_date or not to_date:
             today = datetime.now()
-            from_date = today.replace(day=1).strftime("%Y-%m-%d")
-            to_date = today.strftime("%Y-%m-%d")
+            from_date = today.replace(day=1).strftime("%Y-%m-%dT00:00:00Z")
+            to_date = today.strftime("%Y-%m-%dT00:00:00Z")
         
         try:
             _LOGGER.debug("Retrieving electricity consumption for user: %s, contract ID: %s, period: %s to %s", 
