@@ -1,7 +1,7 @@
 """The Romande Energie integration."""
 import asyncio
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -33,12 +33,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     username = entry.data[CONF_USERNAME]
     password = entry.data[CONF_PASSWORD]
     
+    _LOGGER.debug("Setting up Romande Energie integration for %s", username)
+    _LOGGER.info("Attempting initial connection to Romande Energie API")
+    
     session = async_get_clientsession(hass)
     api_client = RomandeEnergieApiClient(username, password, session)
     
     # Test the connection
     if not await api_client.login():
+        _LOGGER.error("Failed to authenticate with Romande Energie API")
         raise ConfigEntryNotReady("Failed to connect to Romande Energie API")
+    _LOGGER.info("Successfully authenticated with Romande Energie API")
     
     # Define update interval (allow override through options)
     update_interval = timedelta(
@@ -47,28 +52,34 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     
     async def async_update_data():
         """Fetch data from API."""
+        _LOGGER.debug("Starting data update from Romande Energie API")
         try:
             # Get daily consumption
             today = datetime.now().strftime("%Y-%m-%d")
             yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+            _LOGGER.debug("Fetching daily consumption data for period %s to %s", yesterday, today)
             daily_data = await api_client.get_electricity_consumption(
                 from_date=yesterday, to_date=today
             )
             
             # Get monthly consumption
             first_day = datetime.now().replace(day=1).strftime("%Y-%m-%d")
+            _LOGGER.debug("Fetching monthly consumption data for period %s to %s", first_day, today)
             monthly_data = await api_client.get_electricity_consumption(
                 from_date=first_day, to_date=today
             )
             
             if not daily_data or not monthly_data:
+                _LOGGER.error("Failed to fetch consumption data: Empty response")
                 raise UpdateFailed("Failed to fetch consumption data")
-                
+            
+            _LOGGER.debug("Successfully retrieved consumption data")
             return {
                 "daily": daily_data,
                 "monthly": monthly_data,
             }
         except Exception as err:
+            _LOGGER.error("Error communicating with API: %s", str(err), exc_info=True)
             raise UpdateFailed(f"Error communicating with API: {err}")
 
     coordinator = DataUpdateCoordinator(
