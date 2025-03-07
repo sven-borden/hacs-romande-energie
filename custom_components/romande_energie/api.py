@@ -140,7 +140,7 @@ class RomandeEnergieApiClient:
                     return None
 
                 data = await response.json()
-                self.session_id = data.get("SessionID")
+                self.session_id = data.get("accounts", [])[0].get("id") if data.get("accounts") else None
                 _LOGGER.debug("Session info retrieved successfully for user: %s, session ID: %s", 
                             self.username, self.session_id)
                 return data
