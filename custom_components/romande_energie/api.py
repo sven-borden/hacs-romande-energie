@@ -179,20 +179,11 @@ class RomandeEnergieApiClient:
                     return None
 
                 data = await response.json()
-                # Get the first contract or the active one
-                contracts = data.get("contracts", [])
-                _LOGGER.debug("Retrieved %d contracts for user: %s", len(contracts), self.username)
-                
-                if contracts:
-                    active_contracts = [c for c in contracts if c.get("StatusID") == "ACTIVE"]
-                    if active_contracts:
-                        self.contract_id = active_contracts[0].get("ContractId")
-                        _LOGGER.debug("Selected active contract ID: %s for user: %s", 
-                                    self.contract_id, self.username)
-                    else:
-                        self.contract_id = contracts[0].get("ContractId")
-                        _LOGGER.debug("No active contracts found, selected contract ID: %s for user: %s", 
-                                    self.contract_id, self.username)
+                # Store the first contract ID as mentioned in your comment
+                if data and isinstance(data, list) and len(data) > 0:
+                    self.contract_id = data[0].get("id")
+                    _LOGGER.debug("Selected contract ID: %s for user: %s", 
+                                self.contract_id, self.username)
                 
                 return data
                 
