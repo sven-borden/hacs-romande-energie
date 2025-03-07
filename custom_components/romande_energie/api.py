@@ -192,7 +192,15 @@ class RomandeEnergieApiClient:
             return None
 
     async def get_electricity_consumption(self, from_date=None, to_date=None):
-        """Get electricity consumptiosn data."""
+        """Get electricity consumption data for a specific time period.
+        
+        Args:
+            from_date: Start timestamp in ISO format (YYYY-MM-DDThh:mm:ssZ)
+            to_date: End timestamp in ISO format (YYYY-MM-DDThh:mm:ssZ)
+            
+        Returns:
+            Dictionary with consumption data or None if failed
+        """
         if not self.contract_id:
             _LOGGER.debug("No contract ID available, retrieving contracts for user: %s", self.username)
             _ = await self.get_contracts()
@@ -200,11 +208,17 @@ class RomandeEnergieApiClient:
                 _LOGGER.error("No contract ID found for user: %s", self.username)
                 return None
         
-        # Default to current month if dates not specified
+        # Check token validity
+        if not await self.check_token():
+            _LOGGER.error("Failed to validate token for user: %s", self.username)
+            return None
+        
+        # Default to last 24 hours if dates not specified
         if not from_date or not to_date:
-            today = datetime.now()
-            from_date = today.replace(day=1).strftime("%Y-%m-%dT00:00:00Z")
-            to_date = today.strftime("%Y-%m-%dT00:00:00Z")
+            now = datetime.now()
+            to_date = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+            from_date = (now - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            _LOGGER.debug("No date range specified, defaulting to last 24 hours")
         
         try:
             _LOGGER.debug("Retrieving electricity consumption for user: %s, contract ID: %s, period: %s to %s", 
@@ -228,10 +242,31 @@ class RomandeEnergieApiClient:
                     return None
 
                 data = await response.json()
-                consumption_points = len(data.get("curves", []))
+                
+                # Process the data to extract consumption information
+                if not data or not isinstance(data, list) or len(data) == 0:
+                    _LOGGER.warning("No consumption data returned from API")
+                    return None
+                    
+                first_premise = data[0]
+                consumption_data = first_premise.get('consumption', {})
+                values = consumption_data.get('values', [])
+                
                 _LOGGER.debug("Retrieved %d consumption data points for user: %s, contract: %s", 
-                            consumption_points, self.username, self.contract_id)
-                return data
+                            len(values), self.username, self.contract_id)
+                
+                if len(values) == 0:
+                    _LOGGER.warning("No consumption data values found for the specified period: %s to %s", 
+                                  from_date, to_date)
+                
+                return {
+                    'premise_id': first_premise.get('premise_id'),
+                    'premise_address': first_premise.get('premise_address'),
+                    'total': consumption_data.get('total', 0),
+                    'unit': consumption_data.get('unit', 'kWh'),
+                    'periodicity': consumption_data.get('periodicity', 'QUARTER_HOURLY'),
+                    'values': values
+                }
                 
         except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError) as error:
             _LOGGER.error("Error getting electricity consumption for user %s: %s", self.username, error)

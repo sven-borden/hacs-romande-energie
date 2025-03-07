@@ -54,29 +54,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         """Fetch data from API."""
         _LOGGER.info("Starting data update from Romande Energie API") # TODO debug
         try:
-            # Get daily consumption
-            today = datetime.now().strftime("%Y-%m-%dT00:00:00Z")
-            yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%dT00:00:00Z")
-            _LOGGER.info("Fetching daily consumption data for period %s to %s", yesterday, today) # TODO debug
-            daily_data = await api_client.get_electricity_consumption(
-                from_date=yesterday, to_date=today
+            # Get last 24 hours consumption data
+            end_time = datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
+            start_time = (datetime.now() - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            
+            _LOGGER.debug("Fetching consumption data for period %s to %s", start_time, end_time)
+            consumption_data = await api_client.get_electricity_consumption(
+                from_date=start_time, to_date=end_time
             )
             
-            # Get monthly consumption
-            first_day = datetime.now().replace(day=1).strftime("%Y-%m-%dT00:00:00Z")
-            _LOGGER.info("Fetching monthly consumption data for period %s to %s", first_day, today) # TODO debug
-            monthly_data = await api_client.get_electricity_consumption(
-                from_date=first_day, to_date=today
-            )
-            
-            if not daily_data or not monthly_data:
+            if not consumption_data:
                 _LOGGER.error("Failed to fetch consumption data: Empty response")
                 raise UpdateFailed("Failed to fetch consumption data")
             
-            _LOGGER.info("Successfully retrieved consumption data") # TODO debug
+            _LOGGER.debug("Successfully retrieved consumption data")
             return {
-                "daily": daily_data,
-                "monthly": monthly_data,
+                "consumption": consumption_data,
             }
         except Exception as err:
             _LOGGER.error("Error communicating with API: %s", str(err), exc_info=True)
