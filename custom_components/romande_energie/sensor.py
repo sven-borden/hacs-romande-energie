@@ -26,11 +26,11 @@ async def async_setup_entry(
     """Set up Romande Énergie sensor platform."""
     coordinator = hass.data[DOMAIN][entry.entry_id]
     async_add_entities(
-        [RomandeEnergySensor(coordinator, entry.data[CONF_CONTRACT_ID])]
+        [RomandeEnergieSensor(coordinator, entry.data[CONF_CONTRACT_ID])]
     )
 
 
-class RomandeEnergySensor(SensorEntity):
+class RomandeEnergieSensor(SensorEntity):
     """Represent yesterday's energy consumption in kWh."""
 
     _attr_device_class = SensorDeviceClass.ENERGY
@@ -39,7 +39,7 @@ class RomandeEnergySensor(SensorEntity):
 
     def __init__(self, coordinator, contract_id: str) -> None:
         self._coordinator = coordinator
-        self._attr_unique_id = f"romande_energy_{contract_id}_kwh"
+        self._attr_unique_id = f"romande_energie_{contract_id}_kwh"
         self._attr_name = "Romande Énergie Daily"
         self._attr_available = coordinator.last_update_success
         self._update_last_reset()

@@ -1,4 +1,4 @@
-"""Coordinator in charge of talking to Romande‑Énergie API."""
+"""Coordinator in charge of talking to Romande-Énergie API."""
 from __future__ import annotations
 
 import asyncio
@@ -29,7 +29,7 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
-class RomandeEnergyCoordinator(DataUpdateCoordinator[float]):
+class RomandeEnergieCoordinator(DataUpdateCoordinator[float]):
     """Handle authentication, token refresh, and daily energy retrieval."""
 
     def __init__(self, hass: HomeAssistant, conf: dict[str, Any], session: aiohttp.ClientSession) -> None:
