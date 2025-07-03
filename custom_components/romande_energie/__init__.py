@@ -11,7 +11,7 @@ from homeassistant.helpers import aiohttp_client
 from homeassistant.helpers.event import async_track_point_in_time
 
 from .const import DOMAIN, TZ
-from .coordinator import RomandeEnergieCoordinator
+from .coordinator import RomandeEnergyCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -21,7 +21,7 @@ PLATFORMS: list[str] = ["sensor"]
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Create coordinator and forward setups to platform(s)."""
     session = aiohttp_client.async_get_clientsession(hass)
-    coordinator = RomandeEnergieCoordinator(hass, entry.data, session)
+    coordinator = RomandeEnergyCoordinator(hass, entry.data, session)
 
     await coordinator.async_refresh()  # First fetch during set‑up
 
@@ -40,8 +40,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     _schedule_daily_refresh(datetime.now(timezone.utc))
 
-    for platform in PLATFORMS:
-        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+        # Forward setup to sensor platform(s) (new HA 2025 API)
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     return True
 

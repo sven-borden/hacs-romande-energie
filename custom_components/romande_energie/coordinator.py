@@ -29,7 +29,7 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
-class RomandeEnergieCoordinator(DataUpdateCoordinator[float]):
+class RomandeEnergyCoordinator(DataUpdateCoordinator[float]):
     """Handle authentication, token refresh, and daily energy retrieval."""
 
     def __init__(self, hass: HomeAssistant, conf: dict[str, Any], session: aiohttp.ClientSession) -> None:
@@ -82,6 +82,7 @@ class RomandeEnergieCoordinator(DataUpdateCoordinator[float]):
         self._refresh_token = data["refresh_token"]
         decoded = jwt.decode(self._access_token, options={"verify_signature": False})
         self._token_exp = decoded["exp"]
+        # JWT field is user_account_id, not account_id
         self._account_id = decoded.get("user_account_id")
 
     async def _ensure_token(self) -> None:

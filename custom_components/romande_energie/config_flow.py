@@ -22,7 +22,7 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
-class RomandeEnergieConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+class RomandeEnergyConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 1
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None):
@@ -40,7 +40,7 @@ class RomandeEnergieConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
                 access_token: str = login_payload["access_token"]
                 decoded = jwt.decode(access_token, options={"verify_signature": False})
-                account_id: str = decoded.get("user_account_id")
+                account_id: str = decoded.get("user_account_id")  # JWT field is user_account_id
 
                 # 2. Contracts
                 url = CONTRACTS_ENDPOINT.format(account_id=account_id)
