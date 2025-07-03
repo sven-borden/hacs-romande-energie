@@ -40,7 +40,7 @@ class RomandeEnergieConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
                 access_token: str = login_payload["access_token"]
                 decoded = jwt.decode(access_token, options={"verify_signature": False})
-                account_id: str = decoded[CONF_ACCOUNT_ID]
+                account_id: str = decoded.get("user_account_id")
 
                 # 2. Contracts
                 url = CONTRACTS_ENDPOINT.format(account_id=account_id)

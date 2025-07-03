@@ -82,7 +82,7 @@ class RomandeEnergieCoordinator(DataUpdateCoordinator[float]):
         self._refresh_token = data["refresh_token"]
         decoded = jwt.decode(self._access_token, options={"verify_signature": False})
         self._token_exp = decoded["exp"]
-        self._account_id = decoded[CONF_ACCOUNT_ID]
+        self._account_id = decoded.get("user_account_id")
 
     async def _ensure_token(self) -> None:
         if not self._access_token or (self._token_exp - datetime.now(tz=tz.UTC).timestamp() < TOKEN_EXP_MARGIN):
