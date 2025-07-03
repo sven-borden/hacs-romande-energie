@@ -25,7 +25,7 @@ async def async_setup_entry(
 
 class RomandeEnergySensor(SensorEntity):
     _attr_device_class = SensorDeviceClass.ENERGY
-            _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
     _attr_state_class = SensorStateClass.TOTAL_INCREASING
 
     def __init__(self, coordinator, contract_id: str):
