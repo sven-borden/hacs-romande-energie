@@ -1,7 +1,7 @@
 """Romande Énergie integration constants."""
 from zoneinfo import ZoneInfo
 
-DOMAIN = "romande_energy"
+DOMAIN = "romande_energie"
 
 CONF_USERNAME = "username"
 CONF_PASSWORD = "password"
