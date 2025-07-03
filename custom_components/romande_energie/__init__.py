@@ -1,108 +1,54 @@
-"""The Romande Energie integration."""
-import asyncio
+"""Set‑up for the Romande Énergie custom component."""
+from __future__ import annotations
+
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time, timezone
+from zoneinfo import ZoneInfo
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryNotReady
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import aiohttp_client
+from homeassistant.helpers.event import async_track_point_in_time
 
-from .api import RomandeEnergieApiClient
-from .const import (
-    DOMAIN,
-    CONF_USERNAME,
-    CONF_PASSWORD,
-    DEFAULT_SCAN_INTERVAL,
-)
+from .const import DOMAIN, TZ
+from .coordinator import RomandeEnergieCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = ["sensor"]
+PLATFORMS: list[str] = ["sensor"]
 
 
-async def async_setup(hass: HomeAssistant, config: dict):
-    """Set up the Romande Energie component."""
-    hass.data.setdefault(DOMAIN, {})
-    return True
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Create coordinator and forward setups to platform(s)."""
+    session = aiohttp_client.async_get_clientsession(hass)
+    coordinator = RomandeEnergieCoordinator(hass, entry.data, session)
 
+    await coordinator.async_refresh()  # First fetch during set‑up
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
-    """Set up Romande Energie from a config entry."""
-    username = entry.data[CONF_USERNAME]
-    password = entry.data[CONF_PASSWORD]
-    
-    _LOGGER.debug("Setting up Romande Energie integration for %s", username)
-    _LOGGER.info("Attempting initial connection to Romande Energie API")
-    
-    session = async_get_clientsession(hass)
-    api_client = RomandeEnergieApiClient(username, password, session)
-    
-    # Test the connection
-    if not await api_client.login():
-        _LOGGER.error("Failed to authenticate with Romande Energie API")
-        raise ConfigEntryNotReady("Failed to connect to Romande Energie API")
-    _LOGGER.info("Successfully authenticated with Romande Energie API")
-    
-    # Define update interval (allow override through options)
-    update_interval = timedelta(
-        seconds=entry.options.get("scan_interval", DEFAULT_SCAN_INTERVAL.total_seconds())
-    )
-    
-    async def async_update_data():
-        """Fetch data from API."""
-        _LOGGER.info("Starting data update from Romande Energie API") # TODO debug
-        try:
-            # Get last 24 hours consumption data
-            end_time = datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
-            start_time = (datetime.now() - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
-            
-            _LOGGER.debug("Fetching consumption data for period %s to %s", start_time, end_time)
-            consumption_data = await api_client.get_electricity_consumption(
-                from_date=start_time, to_date=end_time
-            )
-            
-            if not consumption_data:
-                _LOGGER.error("Failed to fetch consumption data: Empty response")
-                raise UpdateFailed("Failed to fetch consumption data")
-            
-            _LOGGER.debug("Successfully retrieved consumption data")
-            return {
-                "consumption": consumption_data,
-            }
-        except Exception as err:
-            _LOGGER.error("Error communicating with API: %s", str(err), exc_info=True)
-            raise UpdateFailed(f"Error communicating with API: {err}")
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 
-    coordinator = DataUpdateCoordinator(
-        hass,
-        _LOGGER,
-        name=DOMAIN,
-        update_method=async_update_data,
-        update_interval=update_interval,
-    )
+    # Schedule daily update precisely at 08:00 local time.
+    @callback
+    def _schedule_daily_refresh(now: datetime):
+        async def _run_refresh(_: datetime):
+            await coordinator.async_refresh()
 
-    # Fetch initial data
-    await coordinator.async_config_entry_first_refresh()
+        # Figure next 08:00.
+        next_run_date = (now.astimezone(TZ).date() + timedelta(days=1))
+        next_run_dt = datetime.combine(next_run_date, time(hour=8), tzinfo=TZ)
+        async_track_point_in_time(hass, _run_refresh, next_run_dt)
 
-    hass.data[DOMAIN][entry.entry_id] = {
-        "api_client": api_client,
-        "coordinator": coordinator,
-    }
+    _schedule_daily_refresh(datetime.now(timezone.utc))
 
-    # Use the newer async_forward_entry_setups method instead of async_forward_entry_setup
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    for platform in PLATFORMS:
+        hass.config_entries.async_setup_platforms(entry, [platform])
 
     return True
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
-    """Unload a config entry."""
-    # Update this to use async_unload_platforms as well
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Unload entry."""
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id)
-
     return unload_ok

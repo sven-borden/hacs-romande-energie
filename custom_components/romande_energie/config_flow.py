@@ -1,92 +1,91 @@
-"""Config flow for Romande Energie integration."""
+"""Config flow for Romande Énergie integration."""
+from __future__ import annotations
+
 import logging
-import voluptuous as vol
+from typing import Any
 
-from homeassistant import config_entries, core, exceptions
-from homeassistant.core import callback
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
-import homeassistant.helpers.config_validation as cv
+import aiohttp
+import jwt
+from homeassistant import config_entries
+from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import aiohttp_client
 
-from .api import RomandeEnergieApiClient
-from .const import DOMAIN, CONF_USERNAME, CONF_PASSWORD, DEFAULT_SCAN_INTERVAL
+from .const import (
+    DOMAIN,
+    LOGIN_ENDPOINT,
+    CONTRACTS_ENDPOINT,
+    CONF_CONTRACT_ID,
+    CONF_ACCOUNT_ID,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
-DATA_SCHEMA = vol.Schema({
-    vol.Required(CONF_USERNAME): str,
-    vol.Required(CONF_PASSWORD): str,
-})
-
-
-async def validate_input(hass: core.HomeAssistant, data):
-    """Validate the user input allows us to connect."""
-    username = data[CONF_USERNAME]
-    password = data[CONF_PASSWORD]
-    
-    session = async_get_clientsession(hass)
-    client = RomandeEnergieApiClient(username, password, session)
-    
-    if not await client.login():
-        raise InvalidAuth
-    
-    # Return info to be stored in the config entry
-    return {"title": f"Romande Energie ({username})"}
-
 
 class RomandeEnergieConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    """Handle a config flow for Romande Energie."""
-
     VERSION = 1
-    CONNECTION_CLASS = config_entries.CONN_CLASS_CLOUD_POLL
 
-    async def async_step_user(self, user_input=None):
-        """Handle the initial step."""
-        errors = {}
+    async def async_step_user(self, user_input: dict[str, Any] | None = None):
+        errors: dict[str, str] = {}
 
         if user_input is not None:
+            session = aiohttp_client.async_get_clientsession(self.hass)
+
             try:
-                info = await validate_input(self.hass, user_input)
-                return self.async_create_entry(title=info["title"], data=user_input)
-            except InvalidAuth:
-                errors["base"] = "invalid_auth"
-            except Exception:  # pylint: disable=broad-except
-                _LOGGER.exception("Unexpected exception")
-                errors["base"] = "unknown"
+                # 1. Login
+                async with session.post(LOGIN_ENDPOINT, json=user_input, timeout=20) as resp:
+                    if resp.status != 200:
+                        raise ValueError("invalid_auth")
+                    login_payload = await resp.json()
+
+                access_token: str = login_payload["access_token"]
+                decoded = jwt.decode(access_token, options={"verify_signature": False})
+                account_id: str = decoded[CONF_ACCOUNT_ID]
+
+                # 2. Contracts
+                url = CONTRACTS_ENDPOINT.format(account_id=account_id)
+                headers = {"Authorization": f"Bearer {access_token}"}
+                async with session.get(url, headers=headers, timeout=20) as resp:
+                    if resp.status != 200:
+                        raise ValueError("cannot_connect")
+                    contracts = await resp.json()
+
+                if not contracts:
+                    raise ValueError("no_contract")
+
+                contract_id = contracts[0]["id"]  # Pick the first contract
+
+            except ValueError as exc:
+                errors["base"] = str(exc)
+            except aiohttp.ClientError:
+                errors["base"] = "cannot_connect"
+            else:
+                # Everything looks good → create entry.
+                data = {
+                    CONF_USERNAME: user_input[CONF_USERNAME],
+                    CONF_PASSWORD: user_input[CONF_PASSWORD],
+                    CONF_ACCOUNT_ID: account_id,
+                    CONF_CONTRACT_ID: contract_id,
+                }
+                return self.async_create_entry(title=f"Romande Énergie ({account_id})", data=data)
 
         return self.async_show_form(
-            step_id="user", data_schema=DATA_SCHEMA, errors=errors
+            step_id="user",
+            data_schema=self._get_schema(),
+            errors=errors,
         )
-    
+
+    # -------------------------------------------------------------
+    # Helpers
+    # -------------------------------------------------------------
     @staticmethod
-    @callback
-    def async_get_options_flow(config_entry):
-        """Get the options flow for this handler."""
-        return RomandeEnergieOptionsFlowHandler(config_entry)
+    def _get_schema():
+        from homeassistant.helpers import config_validation as cv
+        import voluptuous as vol
 
-
-class RomandeEnergieOptionsFlowHandler(config_entries.OptionsFlow):
-    """Handle options flow for Romande Energie."""
-
-    def __init__(self, config_entry):
-        """Initialize options flow."""
-        self.config_entry = config_entry
-
-    async def async_step_init(self, user_input=None):
-        """Manage the options."""
-        if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
-
-        options = {
-            vol.Optional(
-                "scan_interval",
-                default=self.config_entry.options.get(
-                    "scan_interval", DEFAULT_SCAN_INTERVAL.total_seconds()
-                ),
-            ): vol.All(cv.positive_int, vol.Clamp(min=1800, max=86400))
-        }
-
-        return self.async_show_form(step_id="init", data_schema=vol.Schema(options))
-
-
-class InvalidAuth(exceptions.HomeAssistantError):
-    """Error to indicate there is invalid auth."""
+        return vol.Schema(
+            {
+                vol.Required(CONF_USERNAME): cv.string,
+                vol.Required(CONF_PASSWORD): cv.string,
+            }
+        )

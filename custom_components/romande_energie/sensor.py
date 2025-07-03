@@ -1,116 +1,52 @@
-"""Sensor platform for Romande Energie integration."""
-import logging
-from typing import Optional, Dict, Any
+"""Romande Énergie daily energie sensor."""
+from __future__ import annotations
+
 from datetime import datetime, timedelta
+import logging
 
-from homeassistant.components.sensor import SensorEntity
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.components.sensor import SensorEntity, SensorDeviceClass, SensorStateClass
+from homeassistant.const import ENERGY_KILO_WATT_HOUR
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from homeassistant.helpers.entity import DeviceInfo
-from homeassistant.const import UnitOfEnergy
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
-from .const import (
-    DOMAIN,
-    SENSOR_TYPES,
-    SENSOR_TYPE_DAILY_CONSUMPTION,
-    SENSOR_TYPE_MONTHLY_CONSUMPTION,
-    SENSOR_TYPE_LATEST_CONSUMPTION,  # Add this
-)
+from .const import DOMAIN, CONF_CONTRACT_ID, TZ, ATTR_ENERGY
 
 _LOGGER = logging.getLogger(__name__)
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities):
-    """Set up Romande Energie sensor based on a config entry."""
-    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
-    api_client = hass.data[DOMAIN][entry.entry_id]["api_client"]
-
-    sensors = []
-    for sensor_type in SENSOR_TYPES:
-        sensors.append(
-            RomandeEnergieSensor(coordinator, api_client, entry, sensor_type)
-        )
-
-    async_add_entities(sensors)
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+    async_add_entities([RomandeEnergieSensor(coordinator, entry.data[CONF_CONTRACT_ID])])
 
 
-class RomandeEnergieSensor(CoordinatorEntity, SensorEntity):
-    """Representation of a Romande Energie sensor."""
+class RomandeEnergieSensor(SensorEntity):
+    _attr_device_class = SensorDeviceClass.ENERGY
+    _attr_native_unit_of_measurement = ENERGY_KILO_WATT_HOUR
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
 
-    def __init__(self, coordinator, api_client, entry, sensor_type):
-        """Initialize the sensor."""
-        super().__init__(coordinator)
-        self.api_client = api_client
-        self.entry = entry
-        self.sensor_type = sensor_type
-        self._attr_unique_id = f"{entry.entry_id}_{sensor_type}"
-        self._attr_name = f"Romande Energie {SENSOR_TYPES[sensor_type]['name']}"
-        self._attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
-        self._attr_icon = SENSOR_TYPES[sensor_type]['icon']
-        self._attr_device_class = SENSOR_TYPES[sensor_type]['device_class']
-        self._attr_state_class = SENSOR_TYPES[sensor_type]['state_class']
+    def __init__(self, coordinator, contract_id: str):
+        self._coordinator = coordinator
+        self._attr_unique_id = f"romande_energie_{contract_id}_kwh"
+        self._attr_name = "Romande Énergie Daily"
+        self._attr_available = coordinator.last_update_success
 
+        # Expose yesterday 00:00 as implicit last_reset (for statistics)
+        yesterday = (datetime.now(tz=TZ) - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        self._attr_last_reset = yesterday
+
+        coordinator.async_add_listener(self.async_write_ha_state)
+
+    # ------------------------------------------------------------------
+    # Home Assistant core API
+    # ------------------------------------------------------------------
     @property
-    def device_info(self) -> DeviceInfo:
-        """Return device info."""
-        return DeviceInfo(
-            identifiers={(DOMAIN, self.entry.entry_id)},
-            name="Romande Energie",
-            manufacturer="Romande Energie",
-            model="Electricity Meter",
-            entry_type="service",
-        )
+    def native_value(self):
+        return self._coordinator.data
 
-    @property
-    def native_value(self) -> Optional[float]:
-        """Return the state of the sensor."""
-        if not self.coordinator.data or "consumption" not in self.coordinator.data:
-            return None
-            
-        try:
-            consumption_data = self.coordinator.data["consumption"]
-            values = consumption_data.get("values", [])
-
-            if not values:
-                return 0
-                
-            if self.sensor_type == SENSOR_TYPE_DAILY_CONSUMPTION:
-                # Filter for today's data points and sum them
-                today = datetime.now().strftime("%Y-%m-%d")
-                today_values = [
-                    float(point.get("value", 0)) 
-                    for point in values 
-                    if point.get("timestamp", "").startswith(today)
-                ]
-                return sum(today_values) if today_values else 0
-                    
-            elif self.sensor_type == SENSOR_TYPE_MONTHLY_CONSUMPTION:
-                # If we have a total in the API response, use it
-                if "total" in consumption_data and consumption_data["total"] is not None:
-                    return float(consumption_data["total"])
-                
-                # Otherwise calculate monthly total from available values
-                # Get first day of current month
-                today = datetime.now()
-                first_day = today.replace(day=1).strftime("%Y-%m-")
-                
-                monthly_values = [
-                    float(point.get("value", 0)) 
-                    for point in values 
-                    if point.get("timestamp", "").startswith(first_day)
-                ]
-                return sum(monthly_values) if monthly_values else 0
-
-            elif self.sensor_type == SENSOR_TYPE_LATEST_CONSUMPTION:
-                # Get the most recent value
-                if values:
-                    # Sort by timestamp descending and take the first one
-                    sorted_values = sorted(values, key=lambda x: x.get("timestamp", ""), reverse=True)
-                    if sorted_values:
-                        return float(sorted_values[0].get("value", 0))
-                return 0
-                
-        except (KeyError, ValueError, TypeError) as err:
-            _LOGGER.error(f"Error calculating sensor value: {err}")
-            return None
+    async def async_update(self):
+        await self._coordinator.async_request_refresh()

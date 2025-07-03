@@ -1,0 +1,3 @@
+update_now:
+  name: "Update now"
+  description: "Trigger an immediate data fetch from Romande Énergie."

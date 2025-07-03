@@ -1,0 +1,21 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Romande Énergie credentials",
+        "data": {
+          "username": "E-mail",
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Invalid credentials",
+      "cannot_connect": "Cannot connect to API",
+      "no_contract": "No contract found"
+    },
+    "abort": {
+      "single_instance_allowed": "Only one instance is allowed"
+    }
+  }
+}
