@@ -104,15 +104,102 @@ class RomandeEnergyCoordinator(DataUpdateCoordinator[float]):
         }
         headers = {"Authorization": f"Bearer {self._access_token}"}
 
+        _LOGGER.debug("GET %s params=%s", url, params)
+
         async with self._session.get(url, params=params, headers=headers, timeout=20) as resp:
+            if resp.status == 403:
+                _LOGGER.warning("403 on curves – refreshing token and retrying once")
+                await self._login()
+                headers["Authorization"] = f"Bearer {self._access_token}"
+                async with self._session.get(url, params=params, headers=headers, timeout=20) as resp_retry:
+                    resp = resp_retry
+
             if resp.status != 200:
+                body = await resp.text()
+                _LOGGER.error("Curves request failed %s – body: %s", resp.status, body[:200])
                 raise UpdateFailed(f"Curve fetch failed: HTTP {resp.status}")
+
             curves = await resp.json()
+
+        _LOGGER.debug("Curves response (truncated): %s", str(curves)[:500])
 
         target_date = (today - timedelta(days=1)).isoformat()
         for item in curves:
-            # Field names are inferred; adapt if API differs.
             if item.get("date") == target_date:
-                return float(item.get("value"))  # kWh assumed in "value"
+                return float(item.get("value"))
         _LOGGER.debug("Yesterday (%s) not found in curve response", target_date)
         return None
+    VERSION = 1
+
+    async def async_step_user(self, user_input: dict[str, Any] | None = None):
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            session = aiohttp_client.async_get_clientsession(self.hass)
+
+            try:
+                # 1. Login
+                async with session.post(LOGIN_ENDPOINT, json=user_input, timeout=20) as resp:
+                    if resp.status != 200:
+                        raise ValueError("invalid_auth")
+                    login_payload = await resp.json()
+
+                access_token: str = login_payload["access_token"]
+                decoded = jwt.decode(access_token, options={"verify_signature": False})
+                account_id: str = decoded.get("user_account_id")  # JWT field is user_account_id
+
+                # 2. Contracts
+                url = CONTRACTS_ENDPOINT.format(account_id=account_id)
+                headers = {"Authorization": f"Bearer {access_token}"}
+                async with session.get(url, headers=headers, timeout=20) as resp:
+                    if resp.status != 200:
+                        raise ValueError("cannot_connect")
+                    contracts = await resp.json()
+
+                if not contracts:
+                    raise ValueError("no_contract")
+
+                # Pick first contract but accept various key names
+                first = contracts[0]
+                contract_id = (
+                    first.get("contract_account_uid")
+                    or first.get("contract_id")
+                    or first.get("id")
+                )
+                _LOGGER.debug("Contracts payload: %s", contracts)
+                _LOGGER.debug("Selected contract_id: %s", contract_id)
+
+            except ValueError as exc:
+                errors["base"] = str(exc)
+            except aiohttp.ClientError:
+                errors["base"] = "cannot_connect"
+            else:
+                # Everything looks good → create entry.
+                data = {
+                    CONF_USERNAME: user_input[CONF_USERNAME],
+                    CONF_PASSWORD: user_input[CONF_PASSWORD],
+                    CONF_ACCOUNT_ID: account_id,
+                    CONF_CONTRACT_ID: contract_id,
+                }
+                return self.async_create_entry(title=f"Romande Énergie ({account_id})", data=data)
+
+        return self.async_show_form(
+            step_id="user",
+            data_schema=self._get_schema(),
+            errors=errors,
+        )
+
+    # -------------------------------------------------------------
+    # Helpers
+    # -------------------------------------------------------------
+    @staticmethod
+    def _get_schema():
+        from homeassistant.helpers import config_validation as cv
+        import voluptuous as vol
+
+        return vol.Schema(
+            {
+                vol.Required(CONF_USERNAME): cv.string,
+                vol.Required(CONF_PASSWORD): cv.string,
+            }
+        )
