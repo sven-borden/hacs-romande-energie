@@ -9,15 +9,16 @@
         }
       },
       "otp": {
-        "title": "Code de vérification (SMS)",
-        "description": "Un code a été envoyé par SMS au {mobile}.",
+        "title": "Verification code (SMS)",
+        "description": "A code has been sent by SMS to {mobile}.",
         "data": {
-          "otp_code": "Code SMS"
+          "otp_code": "SMS code"
         }
       },
       "reauth_confirm": {
-        "title": "Reconnexion Romande Énergie",
+        "title": "Reconnect Romande Énergie",
         "data": {
+          "username": "E-mail",
           "password": "Password"
         }
       }

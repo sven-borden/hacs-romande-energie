@@ -1,0 +1,39 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Identifiants Romande Énergie",
+        "data": {
+          "username": "E-mail",
+          "password": "Mot de passe"
+        }
+      },
+      "otp": {
+        "title": "Code de vérification (SMS)",
+        "description": "Un code a été envoyé par SMS au {mobile}.",
+        "data": {
+          "otp_code": "Code SMS"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Reconnexion Romande Énergie",
+        "data": {
+          "username": "E-mail",
+          "password": "Mot de passe"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Identifiants invalides",
+      "cannot_connect": "Impossible de se connecter à l'API",
+      "invalid_otp": "Code invalide ou expiré",
+      "no_contract": "Aucun contrat trouvé",
+      "unknown": "Erreur inattendue"
+    },
+    "abort": {
+      "already_configured": "Compte déjà configuré",
+      "reauth_successful": "Ré-authentification réussie",
+      "unique_id_mismatch": "Veuillez vous ré-authentifier avec le même compte"
+    }
+  }
+}

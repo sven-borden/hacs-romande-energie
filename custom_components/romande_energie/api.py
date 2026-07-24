@@ -20,7 +20,7 @@ import binascii
 import json
 import logging
 from datetime import date, datetime
-from typing import Any
+from typing import Any, NamedTuple
 
 import aiohttp
 
@@ -50,7 +50,9 @@ class CannotConnect(RomandeEnergieError):
 
 
 class AuthError(RomandeEnergieError):
-    """Invalid credentials at login."""
+    """Authentication/authorization failure (bad credentials, or a token the
+    server rejected — e.g. an otp_pending or expired access token). Note that
+    ``RefreshError`` subclasses this, so order ``except`` clauses accordingly."""
 
 
 class OtpError(RomandeEnergieError):
@@ -140,6 +142,13 @@ class RomandeEnergieApiClient:
         except json.JSONDecodeError as err:
             raise ApiError(f"Non-JSON response: {body[:200]}") from err
 
+    @staticmethod
+    def _require(data: Any, *keys: str, ctx: str) -> dict[str, Any]:
+        """Validate a 200 body carries the expected keys (else typed ApiError)."""
+        if not isinstance(data, dict) or any(k not in data for k in keys):
+            raise ApiError(f"{ctx} response missing expected keys {keys}")
+        return data
+
     # ---- Auth -------------------------------------------------------------
     async def login(self, username: str, password: str) -> dict[str, Any]:
         """Step 1: exchange credentials for an otp_pending token."""
@@ -150,7 +159,7 @@ class RomandeEnergieApiClient:
             raise AuthError("Invalid credentials")
         if status != 200:
             raise ApiError(f"Login failed: HTTP {status}")
-        return self._json(body)  # {"access_token", "mobile_number"}
+        return self._require(self._json(body), "access_token", ctx="login")
 
     async def send_otp(self, otp_pending_token: str) -> dict[str, Any]:
         """Step 2: trigger the SMS OTP."""
@@ -159,7 +168,7 @@ class RomandeEnergieApiClient:
             raise AuthError("otp_pending token rejected by send-otp")
         if status != 200:
             raise ApiError(f"send-otp failed: HTTP {status}")
-        return self._json(body)  # {"otp_id", "valid_to_date"}
+        return self._require(self._json(body), "otp_id", ctx="send-otp")
 
     async def validate_otp(
         self, otp_pending_token: str, otp_id: str, otp_code: str
@@ -174,7 +183,9 @@ class RomandeEnergieApiClient:
             raise OtpError("Invalid or expired OTP code")
         if status != 200:
             raise ApiError(f"validate-otp failed: HTTP {status}")
-        return self._json(body)  # {"access_token", "refresh_token"}
+        return self._require(
+            self._json(body), "access_token", "refresh_token", ctx="validate-otp"
+        )
 
     async def refresh(self, refresh_token: str) -> dict[str, Any]:
         """Rotate the session with the refresh token (no OTP)."""
@@ -185,7 +196,9 @@ class RomandeEnergieApiClient:
             raise RefreshError("Refresh token expired/invalid")
         if status != 200:
             raise ApiError(f"refresh failed: HTTP {status}")
-        return self._json(body)  # {"access_token", "refresh_token"}
+        return self._require(
+            self._json(body), "access_token", "refresh_token", ctx="refresh"
+        )
 
     # ---- Data -------------------------------------------------------------
     async def get_contracts(self, access_token: str, account_id: str) -> list[dict[str, Any]]:
@@ -224,16 +237,26 @@ class RomandeEnergieApiClient:
 # ---------------------------------------------------------------------------
 # Pure parsing helpers for the curve payload
 # ---------------------------------------------------------------------------
+class DailyPoint(NamedTuple):
+    """One day's reading. ``value`` is always a real float (never None)."""
+
+    day: date
+    value: float
+
+
 def _first_block(curves_response: list[dict[str, Any]]) -> dict[str, Any] | None:
     return curves_response[0] if curves_response else None
 
 
 def parse_daily_series(
     curves_response: list[dict[str, Any]], curve_type: str = CURVE_TYPE_CONSUMPTION
-) -> list[tuple[date, float]]:
-    """Return sorted ``(day, kWh)`` pairs for ``curve_type``, dropping null days.
+) -> list[DailyPoint]:
+    """Return day-sorted ``DailyPoint``s for ``curve_type``, dropping null days.
 
-    ``values[i]`` aligns with ``timestamps[i]``; values are strings or null.
+    ``values[i]`` aligns with ``timestamps[i]``; values are strings, or null for
+    days with no data yet. Values from multiple installations/curves of the same
+    type are summed per day (household total). Parse problems are logged rather
+    than silently swallowed so a portal format change is diagnosable.
     """
     block = _first_block(curves_response)
     if not block:
@@ -241,52 +264,49 @@ def parse_daily_series(
 
     timestamps: list[str] = block.get("timestamps") or []
     installations = block.get("installations") or []
-    series: list[tuple[date, float]] = []
+    dedup: dict[date, float] = {}
+    seen_values = False
     for installation in installations:
         for curve in installation.get("curves") or []:
             if curve.get("curve_type") != curve_type:
                 continue
             values = curve.get("values") or []
+            if len(values) != len(timestamps):
+                _LOGGER.warning(
+                    "%s curve length mismatch: %d timestamps vs %d values; "
+                    "days may be misaligned",
+                    curve_type,
+                    len(timestamps),
+                    len(values),
+                )
             for ts, value in zip(timestamps, values):
                 if value is None:
                     continue
+                seen_values = True
                 try:
                     day = datetime.fromisoformat(ts).date()
-                    series.append((day, float(value)))
-                except (ValueError, TypeError):
+                    parsed = float(value)
+                except (ValueError, TypeError) as err:
+                    _LOGGER.warning(
+                        "Dropping unparseable %s point ts=%r value=%r: %s",
+                        curve_type,
+                        ts,
+                        value,
+                        err,
+                    )
                     continue
-    # If several installations/curves matched, keep the last value per day.
-    dedup: dict[date, float] = {}
-    for day, value in series:
-        dedup[day] = value
-    return sorted(dedup.items())
+                dedup[day] = dedup.get(day, 0.0) + parsed
+
+    if seen_values and not dedup:
+        # Non-null values were present but none parsed -> likely a format change.
+        _LOGGER.warning(
+            "No %s values could be parsed although the payload contained data; "
+            "the portal response format may have changed",
+            curve_type,
+        )
+    return [DailyPoint(day, value) for day, value in sorted(dedup.items())]
 
 
-def latest_value(series: list[tuple[date, float]]) -> tuple[date, float] | None:
-    """Return the most recent ``(day, value)`` pair, or None."""
+def latest_value(series: list[DailyPoint]) -> DailyPoint | None:
+    """Return the most recent ``DailyPoint`` (series is day-sorted), or None."""
     return series[-1] if series else None
-
-
-def value_for(series: list[tuple[date, float]], target: date) -> float | None:
-    """Return the value recorded for ``target`` day, or None."""
-    for day, value in series:
-        if day == target:
-            return value
-    return None
-
-
-def month_total(
-    curves_response: list[dict[str, Any]], curve_type: str = CURVE_TYPE_CONSUMPTION
-) -> float | None:
-    """Return the month ``total`` from ``curves_statistics`` for ``curve_type``."""
-    block = _first_block(curves_response)
-    if not block:
-        return None
-    stats = (block.get("curves_statistics") or {}).get(curve_type) or {}
-    total = stats.get("total")
-    if total is None:
-        return None
-    try:
-        return float(total)
-    except (ValueError, TypeError):
-        return None

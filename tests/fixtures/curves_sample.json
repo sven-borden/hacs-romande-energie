@@ -1,0 +1,30 @@
+[
+  {
+    "contract_id": "CONTRACT_TEST",
+    "granularity": "DAILY",
+    "timestamps": [
+      "2026-06-01T00:00:00+02:00",
+      "2026-06-02T00:00:00+02:00",
+      "2026-06-03T00:00:00+02:00",
+      "2026-06-04T00:00:00+02:00",
+      "2026-06-05T00:00:00+02:00"
+    ],
+    "installations": [
+      {
+        "installation_id": "INST_TEST",
+        "curves": [
+          {
+            "curve_type": "consumption",
+            "unit": "kWh",
+            "values": ["10.5", "11.0", "9.25", "12.0", null]
+          },
+          {
+            "curve_type": "surplus",
+            "unit": "kWh",
+            "values": ["2.0", "1.5", "0.0", "3.25", null]
+          }
+        ]
+      }
+    ]
+  }
+]

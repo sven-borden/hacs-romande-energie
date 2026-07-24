@@ -74,15 +74,24 @@ class RomandeEnergieConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 contracts = await client.get_contracts(access, self._account_id)
             except OtpError:
                 errors["base"] = "invalid_otp"
-            except AuthError:
-                errors["base"] = "invalid_auth"
-            except CannotConnect:
+            except AuthError as err:
+                # Not bad credentials here: the OTP passed but the token was
+                # rejected fetching contracts. Don't blame the password.
+                _LOGGER.error("Authorization failed after OTP: %s", err)
+                errors["base"] = "unknown"
+            except CannotConnect as err:
+                _LOGGER.debug("Cannot connect during OTP step: %s", err)
                 errors["base"] = "cannot_connect"
-            except ApiError:
+            except ApiError as err:
+                _LOGGER.error("Unexpected API error during OTP step: %s", err)
                 errors["base"] = "unknown"
             else:
                 contract_id = contracts[0].get("id") if contracts else None
                 if not contract_id:
+                    if contracts:
+                        _LOGGER.error(
+                            "Contract has no 'id'; keys=%s", list(contracts[0])
+                        )
                     errors["base"] = "no_contract"
                 else:
                     await self.async_set_unique_id(self._account_id)
@@ -159,9 +168,11 @@ class RomandeEnergieConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return {"base": "invalid_auth"}
         except OtpError:
             return {"base": "invalid_otp"}
-        except CannotConnect:
+        except CannotConnect as err:
+            _LOGGER.debug("Cannot connect during login/send-otp: %s", err)
             return {"base": "cannot_connect"}
-        except ApiError:
+        except ApiError as err:
+            _LOGGER.error("Unexpected API error during login/send-otp: %s", err)
             return {"base": "unknown"}
         _LOGGER.debug("OTP sent for account %s", self._account_id)
         return {}

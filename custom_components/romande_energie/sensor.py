@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import date
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -11,7 +12,7 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfEnergy
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -25,6 +26,7 @@ class RomandeEnergieSensorEntityDescription(SensorEntityDescription):
     """Describe a Romande Énergie sensor."""
 
     value_fn: Callable[[RomandeEnergieData], float | None]
+    day_fn: Callable[[RomandeEnergieData], date | None] | None = None
     surplus: bool = False  # True => only added when data.has_surplus
 
 
@@ -36,7 +38,8 @@ DESCRIPTIONS: tuple[RomandeEnergieSensorEntityDescription, ...] = (
         name="Consommation (veille)",
         device_class=SensorDeviceClass.ENERGY,
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-        value_fn=lambda d: d.consumption_yesterday,
+        value_fn=lambda d: d.consumption.value if d.consumption else None,
+        day_fn=lambda d: d.consumption.day if d.consumption else None,
     ),
     RomandeEnergieSensorEntityDescription(
         key="consumption_month",
@@ -51,7 +54,8 @@ DESCRIPTIONS: tuple[RomandeEnergieSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.ENERGY,
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         surplus=True,
-        value_fn=lambda d: d.surplus_yesterday,
+        value_fn=lambda d: d.surplus.value if d.surplus else None,
+        day_fn=lambda d: d.surplus.day if d.surplus else None,
     ),
     RomandeEnergieSensorEntityDescription(
         key="surplus_month",
@@ -114,18 +118,10 @@ class RomandeEnergieSensor(
 
     @property
     def extra_state_attributes(self) -> dict[str, str] | None:
-        """Expose the measurement day for the "veille" sensors."""
-        if not self.entity_description.key.endswith("_yesterday"):
-            return None
+        """Expose the measurement day (for the "veille" sensors that define day_fn)."""
+        day_fn = self.entity_description.day_fn
         data = self.coordinator.data
-        if data is None:
+        if day_fn is None or data is None:
             return None
-        # e.g. consumption_yesterday -> consumption_yesterday_day
-        day = getattr(data, f"{self.entity_description.key}_day", None)
+        day = day_fn(data)
         return {"measurement_day": day.isoformat()} if day else None
-
-    @callback
-    def _handle_coordinator_update(self) -> None:
-        """Keep the last good value on transient empty payloads."""
-        if self.coordinator.data is not None:
-            super()._handle_coordinator_update()
