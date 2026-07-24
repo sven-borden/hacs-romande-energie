@@ -1,54 +1,54 @@
-"""Set‑up for the Romande Énergie custom component."""
+"""Set-up for the Romande Énergie custom component."""
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, time, timezone
-from zoneinfo import ZoneInfo
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.const import Platform
+from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import aiohttp_client
-from homeassistant.helpers.event import async_track_point_in_time
 
-from .const import DOMAIN, TZ
+from .api import RomandeEnergieApiClient
+from .const import DOMAIN
 from .coordinator import RomandeEnergieCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[str] = ["sensor"]
+PLATFORMS = [Platform.SENSOR]
+SERVICE_UPDATE_NOW = "update_now"
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Create coordinator and forward setups to platform(s)."""
+    """Create coordinator, do first refresh, forward platforms, register service."""
     session = aiohttp_client.async_get_clientsession(hass)
-    coordinator = RomandeEnergieCoordinator(hass, entry.data, session)
-
-    await coordinator.async_refresh()  # First fetch during set‑up
+    coordinator = RomandeEnergieCoordinator(hass, entry, RomandeEnergieApiClient(session))
+    await coordinator.async_config_entry_first_refresh()
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
-
-    # Schedule daily update precisely at 08:00 local time.
-    @callback
-    def _schedule_daily_refresh(now: datetime):
-        async def _run_refresh(_: datetime):
-            await coordinator.async_refresh()
-
-        # Figure next 08:00.
-        next_run_date = (now.astimezone(TZ).date() + timedelta(days=1))
-        next_run_dt = datetime.combine(next_run_date, time(hour=8), tzinfo=TZ)
-        async_track_point_in_time(hass, _run_refresh, next_run_dt)
-
-    _schedule_daily_refresh(datetime.now(timezone.utc))
-
-        # Forward setup to sensor platform(s) (new HA 2025 API)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-
+    _register_services(hass)
     return True
 
 
+def _register_services(hass: HomeAssistant) -> None:
+    """Register the update_now service once (coordinator polling handles the rest)."""
+    if hass.services.has_service(DOMAIN, SERVICE_UPDATE_NOW):
+        return
+
+    async def _update_now(call: ServiceCall) -> None:
+        """Force an immediate refresh on every loaded coordinator."""
+        for coord in hass.data.get(DOMAIN, {}).values():
+            await coord.async_request_refresh()
+
+    hass.services.async_register(DOMAIN, SERVICE_UPDATE_NOW, _update_now)
+
+
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Unload entry."""
+    """Unload entry; drop the service once the last entry is gone."""
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id)
+        if not hass.data[DOMAIN]:
+            hass.data.pop(DOMAIN)
+            hass.services.async_remove(DOMAIN, SERVICE_UPDATE_NOW)
     return unload_ok

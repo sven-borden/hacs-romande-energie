@@ -1,61 +1,131 @@
-"""Romande Énergie daily energy sensor."""
+"""Romande Énergie energy sensors."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta
-import logging
+from collections.abc import Callable
+from dataclasses import dataclass
 
 from homeassistant.components.sensor import (
-    SensorEntity,
     SensorDeviceClass,
-    SensorStateClass,
+    SensorEntity,
+    SensorEntityDescription,
 )
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfEnergy
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, CONF_CONTRACT_ID, TZ
+from .const import DOMAIN
+from .coordinator import RomandeEnergieCoordinator, RomandeEnergieData
 
-_LOGGER = logging.getLogger(__name__)
+
+@dataclass(frozen=True, kw_only=True)
+class RomandeEnergieSensorEntityDescription(SensorEntityDescription):
+    """Describe a Romande Énergie sensor."""
+
+    value_fn: Callable[[RomandeEnergieData], float | None]
+    surplus: bool = False  # True => only added when data.has_surplus
+
+
+# state_class deliberately unset: external statistics carry the Energy-dashboard
+# history, so a state_class here would double-count.
+DESCRIPTIONS: tuple[RomandeEnergieSensorEntityDescription, ...] = (
+    RomandeEnergieSensorEntityDescription(
+        key="consumption_yesterday",
+        name="Consommation (veille)",
+        device_class=SensorDeviceClass.ENERGY,
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        value_fn=lambda d: d.consumption_yesterday,
+    ),
+    RomandeEnergieSensorEntityDescription(
+        key="consumption_month",
+        name="Consommation (mois)",
+        device_class=SensorDeviceClass.ENERGY,
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        value_fn=lambda d: d.consumption_month_total,
+    ),
+    RomandeEnergieSensorEntityDescription(
+        key="surplus_yesterday",
+        name="Excédent (veille)",
+        device_class=SensorDeviceClass.ENERGY,
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        surplus=True,
+        value_fn=lambda d: d.surplus_yesterday,
+    ),
+    RomandeEnergieSensorEntityDescription(
+        key="surplus_month",
+        name="Excédent (mois)",
+        device_class=SensorDeviceClass.ENERGY,
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        surplus=True,
+        value_fn=lambda d: d.surplus_month_total,
+    ),
+)
 
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry,
+    entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up Romande Énergie sensor platform."""
-    coordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities(
-        [RomandeEnergieSensor(coordinator, entry.data[CONF_CONTRACT_ID])]
-    )
+    """Set up the sensors from a config entry."""
+    coordinator: RomandeEnergieCoordinator = hass.data[DOMAIN][entry.entry_id]
+    # First refresh already ran, so coordinator.data is populated.
+    has_surplus = bool(coordinator.data and coordinator.data.has_surplus)
+    entities = [
+        RomandeEnergieSensor(coordinator, description)
+        for description in DESCRIPTIONS
+        if has_surplus or not description.surplus
+    ]
+    async_add_entities(entities)
 
 
-class RomandeEnergieSensor(SensorEntity):
-    """Represent yesterday's energy consumption in kWh."""
+class RomandeEnergieSensor(
+    CoordinatorEntity[RomandeEnergieCoordinator], SensorEntity
+):
+    """A single Romande Énergie energy sensor."""
 
-    _attr_device_class = SensorDeviceClass.ENERGY
-    _attr_state_class = SensorStateClass.TOTAL_INCREASING
-    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+    _attr_has_entity_name = True
+    entity_description: RomandeEnergieSensorEntityDescription
 
-    def __init__(self, coordinator, contract_id: str) -> None:
-        self._coordinator = coordinator
-        self._attr_unique_id = f"romande_energie_{contract_id}_kwh"
-        self._attr_name = "Romande Énergie Daily"
-        self._attr_available = coordinator.last_update_success
-        self._update_last_reset()
+    def __init__(
+        self,
+        coordinator: RomandeEnergieCoordinator,
+        description: RomandeEnergieSensorEntityDescription,
+    ) -> None:
+        super().__init__(coordinator)
+        self.entity_description = description
+        self._attr_unique_id = f"{DOMAIN}_{coordinator.contract_id}_{description.key}"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, coordinator.contract_id)},
+            name="Romande Énergie",
+            manufacturer="Romande Énergie",
+            model="Espace client",
+            entry_type=DeviceEntryType.SERVICE,
+        )
 
-        coordinator.async_add_listener(self.async_write_ha_state)
-
-    def _update_last_reset(self) -> None:
-        yesterday_midnight = (
-            datetime.now(tz=TZ) - timedelta(days=1)
-        ).replace(hour=0, minute=0, second=0, microsecond=0)
-        self._attr_last_reset = yesterday_midnight
-
-    # ---------- Home Assistant Entity hooks ----------
     @property
-    def native_value(self):
-        return self._coordinator.data
+    def native_value(self) -> float | None:
+        """Return the current value from the coordinator data."""
+        if self.coordinator.data is None:
+            return None
+        return self.entity_description.value_fn(self.coordinator.data)
 
-    async def async_update(self) -> None:
-        await self._coordinator.async_request_refresh()
+    @property
+    def extra_state_attributes(self) -> dict[str, str] | None:
+        """Expose the measurement day for the "veille" sensors."""
+        if not self.entity_description.key.endswith("_yesterday"):
+            return None
+        data = self.coordinator.data
+        if data is None:
+            return None
+        # e.g. consumption_yesterday -> consumption_yesterday_day
+        day = getattr(data, f"{self.entity_description.key}_day", None)
+        return {"measurement_day": day.isoformat()} if day else None
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Keep the last good value on transient empty payloads."""
+        if self.coordinator.data is not None:
+            super()._handle_coordinator_update()
