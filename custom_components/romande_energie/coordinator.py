@@ -1,205 +1,208 @@
-"""Coordinator in charge of talking to Romande-Énergie API."""
+"""DataUpdateCoordinator for the Romande Énergie integration.
+
+Keeps the session warm by refreshing before the access token expires, pulls a
+rolling window of daily curves each poll, feeds long-term statistics into the
+recorder and exposes the latest daily/monthly figures to the sensors.
+"""
 from __future__ import annotations
 
-import asyncio
-from datetime import datetime, timedelta
 import logging
-from typing import Any
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 
-import aiohttp
-import jwt
-from dateutil import tz
+from homeassistant.components.recorder import get_instance
+from homeassistant.components.recorder.models import StatisticData, StatisticMetaData
+from homeassistant.components.recorder.statistics import (
+    async_add_external_statistics,
+    get_last_statistics,
+)
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
+from . import api
+from .api import (
+    ApiError,
+    AuthError,
+    CannotConnect,
+    DailyPoint,
+    RefreshError,
+    RomandeEnergieApiClient,
+)
 from .const import (
-    LOGIN_ENDPOINT,
-    CONTRACTS_ENDPOINT,
-    CURVE_ENDPOINT,
-    CONF_USERNAME,
-    CONF_PASSWORD,
     CONF_ACCOUNT_ID,
     CONF_CONTRACT_ID,
+    CONF_PASSWORD,
+    CONF_REFRESH_TOKEN,
+    CONF_USERNAME,
+    CURVE_TYPE_CONSUMPTION,
+    CURVE_TYPE_SURPLUS,
+    DOMAIN,
     FETCH_DAYS,
     TOKEN_EXP_MARGIN,
     TZ,
-    ATTR_ENERGY,
+    UNIT_KWH,
+    UPDATE_INTERVAL,
 )
 
 _LOGGER = logging.getLogger(__name__)
 
 
-class RomandeEnergieCoordinator(DataUpdateCoordinator[float]):
-    """Handle authentication, token refresh, and daily energy retrieval."""
+def _calendar_month_total(series: list[DailyPoint], ref: date) -> float | None:
+    """Sum the values of ``series`` that fall in ref's calendar month.
 
-    def __init__(self, hass: HomeAssistant, conf: dict[str, Any], session: aiohttp.ClientSession) -> None:
-        self.hass = hass
-        self._session = session
-        self._username: str = conf[CONF_USERNAME]
-        self._password: str = conf[CONF_PASSWORD]
-        self._contract_id: str = conf[CONF_CONTRACT_ID]
+    The curve request uses a rolling window, so ``curves_statistics.total`` is a
+    rolling total, not month-to-date — compute the calendar month ourselves.
+    """
+    month = [p.value for p in series if p.day.year == ref.year and p.day.month == ref.month]
+    return round(sum(month), 4) if month else None
+
+
+@dataclass(frozen=True)
+class RomandeEnergieData:
+    """Snapshot handed to the sensors each poll.
+
+    Pairing the value with its day in a single ``DailyPoint`` makes the
+    "value present but day missing" state unrepresentable.
+    """
+
+    consumption: DailyPoint | None
+    consumption_month_total: float | None
+    surplus: DailyPoint | None
+    surplus_month_total: float | None
+
+    @property
+    def has_surplus(self) -> bool:
+        """True when the account reports surplus (solar) data."""
+        return self.surplus is not None
+
+
+class RomandeEnergieCoordinator(DataUpdateCoordinator[RomandeEnergieData]):
+    """Coordinate token refresh, curve polling and statistics ingestion."""
+
+    def __init__(
+        self, hass: HomeAssistant, entry: ConfigEntry, client: RomandeEnergieApiClient
+    ) -> None:
+        self.client = client
+        self.config_entry = entry
+        self.username: str = entry.data[CONF_USERNAME]
+        self.password: str = entry.data[CONF_PASSWORD]
+        self.account_id: str = entry.data[CONF_ACCOUNT_ID]
+        self.contract_id: str = entry.data[CONF_CONTRACT_ID]
+        # Per-contract statistic ids so multiple accounts never collide.
+        self._stat_id_consumption = f"{DOMAIN}:{self.contract_id}_consumption"
+        self._stat_id_surplus = f"{DOMAIN}:{self.contract_id}_surplus"
         self._access_token: str | None = None
-        self._refresh_token: str | None = None
-        self._token_exp: int = 0  # epoch seconds
-
+        self._token_exp: int = 0
+        self._refresh_token: str = entry.data[CONF_REFRESH_TOKEN]
         super().__init__(
             hass,
             _LOGGER,
             name="Romande Énergie",
-            update_interval=timedelta(days=1),  # actual timing set in __init__.py
+            update_interval=UPDATE_INTERVAL,
         )
 
-    # ---------------------------------------------------------------------
-    # Public helpers used by platform(s)
-    # ---------------------------------------------------------------------
-    async def async_get_yesterday_kwh(self) -> float | None:
-        """Return yesterday's kWh if available (else None)."""
-        return self.data  # coordinator.data is yesterday's value
-
-    # ---------------------------------------------------------------------
-    # DataUpdateCoordinator hooks
-    # ---------------------------------------------------------------------
-    async def _async_update_data(self) -> float:
-        """Fetch yesterday's consumption and return its kWh value."""
-        await self._ensure_token()
-        yesterday_value = await self._fetch_yesterday_kwh()
-        if yesterday_value is None:
-            raise UpdateFailed("No data returned for yesterday")
-        return yesterday_value
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-    async def _login(self) -> None:
-        """Authenticate and store tokens."""
-        payload = {"username": self._username, "password": self._password}
-        async with self._session.post(LOGIN_ENDPOINT, json=payload, timeout=20) as resp:
-            if resp.status != 200:
-                raise UpdateFailed(f"Login failed: HTTP {resp.status}")
-            data = await resp.json()
-
-        self._access_token = data["access_token"]
-        self._refresh_token = data["refresh_token"]
-        decoded = jwt.decode(self._access_token, options={"verify_signature": False})
-        self._token_exp = decoded["exp"]
-        # JWT field is user_account_id, not account_id
-        self._account_id = decoded.get("user_account_id")
-
+    # ---- Auth -------------------------------------------------------------
     async def _ensure_token(self) -> None:
-        if not self._access_token or (self._token_exp - datetime.now(tz=tz.UTC).timestamp() < TOKEN_EXP_MARGIN):
-            await self._login()
+        """Refresh the access token if missing or close to expiry."""
+        now = datetime.now(tz=TZ).timestamp()
+        if self._access_token and self._token_exp - now > TOKEN_EXP_MARGIN:
+            return
+        try:
+            tokens = await self.client.refresh(self._refresh_token)
+        except RefreshError as err:  # refresh token dead -> HA reauth (fresh OTP)
+            raise ConfigEntryAuthFailed(str(err)) from err
+        self._access_token = tokens["access_token"]
+        self._refresh_token = tokens["refresh_token"]
+        self._token_exp = api.token_expiry(self._access_token)
+        await self._persist_refresh_token()  # rotate: save the new refresh token
 
-    async def _fetch_yesterday_kwh(self) -> float | None:
-        """Fetch last 30 days and return value for yesterday."""
-        # Compute dates
-        today = datetime.now(tz=TZ).date()
-        start_date = (today - timedelta(days=FETCH_DAYS)).isoformat()
-        end_date = today.isoformat()
+    async def _persist_refresh_token(self) -> None:
+        """Store the rotated refresh token back on the config entry."""
+        if self._refresh_token != self.config_entry.data.get(CONF_REFRESH_TOKEN):
+            new = {**self.config_entry.data, CONF_REFRESH_TOKEN: self._refresh_token}
+            self.hass.config_entries.async_update_entry(self.config_entry, data=new)
 
-        url = CURVE_ENDPOINT.format(contract_id=self._contract_id)
-        params = {
-            "start_date": start_date,
-            "end_date": end_date,
-            "granularity": "DAILY",
-        }
-        headers = {"Authorization": f"Bearer {self._access_token}"}
+    # ---- Poll -------------------------------------------------------------
+    async def _async_update_data(self) -> RomandeEnergieData:
+        try:
+            await self._ensure_token()
+            today = datetime.now(tz=TZ).date()
+            start = (today - timedelta(days=FETCH_DAYS)).isoformat()
+            end = (today + timedelta(days=1)).isoformat()
+            raw = await self.client.get_curves(
+                self._access_token, self.contract_id, start, end
+            )
+        except ConfigEntryAuthFailed:
+            raise
+        except AuthError as err:  # access token rejected mid-poll -> reauth
+            raise ConfigEntryAuthFailed(str(err)) from err
+        except (CannotConnect, ApiError) as err:
+            raise UpdateFailed(str(err)) from err
 
-        _LOGGER.debug("GET %s params=%s", url, params)
+        cons = api.parse_daily_series(raw, CURVE_TYPE_CONSUMPTION)
+        surp = api.parse_daily_series(raw, CURVE_TYPE_SURPLUS)
 
-        async with self._session.get(url, params=params, headers=headers, timeout=20) as resp:
-            if resp.status == 403:
-                _LOGGER.warning("403 on curves – refreshing token and retrying once")
-                await self._login()
-                headers["Authorization"] = f"Bearer {self._access_token}"
-                async with self._session.get(url, params=params, headers=headers, timeout=20) as resp_retry:
-                    resp = resp_retry
+        # Long-term statistics feed the energy dashboard but are auxiliary: a
+        # recorder hiccup must not blank the sensors, so failures are logged only.
+        try:
+            await self._insert_statistics(
+                self._stat_id_consumption, "Consumption", cons
+            )
+            if surp:
+                await self._insert_statistics(self._stat_id_surplus, "Surplus", surp)
+        except Exception as err:  # noqa: BLE001 - stats are best-effort
+            _LOGGER.warning("Failed to write long-term statistics: %s", err)
 
-            if resp.status != 200:
-                body = await resp.text()
-                _LOGGER.error("Curves request failed %s – body: %s", resp.status, body[:200])
-                raise UpdateFailed(f"Curve fetch failed: HTTP {resp.status}")
+        return RomandeEnergieData(
+            consumption=api.latest_value(cons),
+            consumption_month_total=_calendar_month_total(cons, today),
+            surplus=api.latest_value(surp),
+            surplus_month_total=_calendar_month_total(surp, today),
+        )
 
-            curves = await resp.json()
-
-        _LOGGER.debug("Curves response (truncated): %s", str(curves)[:500])
-
-        target_date = (today - timedelta(days=1)).isoformat()
-        for item in curves:
-            if item.get("date") == target_date:
-                return float(item.get("value"))
-        _LOGGER.debug("Yesterday (%s) not found in curve response", target_date)
-        return None
-    VERSION = 1
-
-    async def async_step_user(self, user_input: dict[str, Any] | None = None):
-        errors: dict[str, str] = {}
-
-        if user_input is not None:
-            session = aiohttp_client.async_get_clientsession(self.hass)
-
-            try:
-                # 1. Login
-                async with session.post(LOGIN_ENDPOINT, json=user_input, timeout=20) as resp:
-                    if resp.status != 200:
-                        raise ValueError("invalid_auth")
-                    login_payload = await resp.json()
-
-                access_token: str = login_payload["access_token"]
-                decoded = jwt.decode(access_token, options={"verify_signature": False})
-                account_id: str = decoded.get("user_account_id")  # JWT field is user_account_id
-
-                # 2. Contracts
-                url = CONTRACTS_ENDPOINT.format(account_id=account_id)
-                headers = {"Authorization": f"Bearer {access_token}"}
-                async with session.get(url, headers=headers, timeout=20) as resp:
-                    if resp.status != 200:
-                        raise ValueError("cannot_connect")
-                    contracts = await resp.json()
-
-                if not contracts:
-                    raise ValueError("no_contract")
-
-                # Pick first contract but accept various key names
-                first = contracts[0]
-                contract_id = (
-                    first.get("contract_account_uid")
-                    or first.get("contract_id")
-                    or first.get("id")
+    # ---- Statistics -------------------------------------------------------
+    async def _insert_statistics(
+        self, stat_id: str, name_suffix: str, series: list[DailyPoint]
+    ) -> None:
+        """Append daily cumulative-sum statistics, skipping already-stored days."""
+        if not series:
+            return
+        metadata = StatisticMetaData(
+            has_mean=False,
+            has_sum=True,
+            name=f"Romande Énergie {name_suffix}",
+            source=DOMAIN,
+            statistic_id=stat_id,
+            unit_of_measurement=UNIT_KWH,
+        )
+        last = await get_instance(self.hass).async_add_executor_job(
+            get_last_statistics, self.hass, 1, stat_id, True, {"sum"}
+        )
+        running = 0.0
+        last_ts: float | None = None
+        prev = last.get(stat_id)
+        if prev:
+            # Only continue an existing series when we can read both its running
+            # sum and its last timestamp; otherwise emitting a fresh series would
+            # push the cumulative sum backwards (read as a meter reset).
+            prev_sum = prev[0].get("sum")
+            last_ts = prev[0].get("start")
+            if prev_sum is None or last_ts is None:
+                _LOGGER.warning(
+                    "Last %s statistic missing sum/start; skipping this cycle",
+                    stat_id,
                 )
-                _LOGGER.debug("Contracts payload: %s", contracts)
-                _LOGGER.debug("Selected contract_id: %s", contract_id)
+                return
+            running = float(prev_sum)
 
-            except ValueError as exc:
-                errors["base"] = str(exc)
-            except aiohttp.ClientError:
-                errors["base"] = "cannot_connect"
-            else:
-                # Everything looks good → create entry.
-                data = {
-                    CONF_USERNAME: user_input[CONF_USERNAME],
-                    CONF_PASSWORD: user_input[CONF_PASSWORD],
-                    CONF_ACCOUNT_ID: account_id,
-                    CONF_CONTRACT_ID: contract_id,
-                }
-                return self.async_create_entry(title=f"Romande Énergie ({account_id})", data=data)
-
-        return self.async_show_form(
-            step_id="user",
-            data_schema=self._get_schema(),
-            errors=errors,
-        )
-
-    # -------------------------------------------------------------
-    # Helpers
-    # -------------------------------------------------------------
-    @staticmethod
-    def _get_schema():
-        from homeassistant.helpers import config_validation as cv
-        import voluptuous as vol
-
-        return vol.Schema(
-            {
-                vol.Required(CONF_USERNAME): cv.string,
-                vol.Required(CONF_PASSWORD): cv.string,
-            }
-        )
+        points: list[StatisticData] = []
+        for point in series:
+            start = datetime(point.day.year, point.day.month, point.day.day, tzinfo=TZ)
+            if last_ts is not None and start.timestamp() <= last_ts:
+                continue
+            running += point.value
+            points.append(StatisticData(start=start, state=point.value, sum=running))
+        if points:
+            async_add_external_statistics(self.hass, metadata, points)

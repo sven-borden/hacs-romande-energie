@@ -6,10 +6,15 @@ This repository contains the Romande Energie integration for Home Assistant, all
 
 ## Features
 
-- Log in to the Romande Energie API
-- Retrieve session information
-- Get contracts associated with the account
-- Fetch electricity consumption data
+- Log in to the Romande Énergie customer portal (e-mail + password + SMS one-time code)
+- Automatically keeps the session alive by refreshing tokens (no repeated SMS codes)
+- Fetches daily electricity data from your smart meter
+- Entities:
+  - Daily consumption (yesterday, kWh)
+  - Monthly consumption total (kWh)
+  - Daily surplus (yesterday, kWh) — for solar producers
+  - Monthly surplus total (kWh) — for solar producers
+- Home Assistant Energy dashboard support via long-term statistics
 
 ## Installation
 
@@ -22,16 +27,31 @@ This repository contains the Romande Energie integration for Home Assistant, all
 
 ## Configuration
 
-To configure the Romande Energie integration:
+The Romande Énergie portal requires a two-step login: your credentials **and** an SMS
+one-time code (OTP).
 
-1. Go to `Configuration` in Home Assistant.
-2. Click on `Integrations`.
-3. Click on `Add Integration` and search for `Romande Energie`.
-4. Enter your Romande Energie account credentials (username and password).
+1. Go to `Settings` → `Devices & Services` in Home Assistant.
+2. Click `Add Integration` and search for `Romande Energie`.
+3. Enter your Romande Énergie **e-mail** and **password**.
+4. An **SMS code** is sent to the mobile number registered on your account. Enter that
+   6-digit code to finish setup.
+
+After setup the integration keeps its session alive by refreshing tokens on its own, so
+you normally will **not** be asked for another SMS code.
+
+### Re-authentication
+
+The portal session only survives short gaps. If Home Assistant is offline (or the network
+is down) for longer than ~30 minutes, the session lapses and cannot be refreshed silently.
+When that happens Home Assistant raises a **re-authentication** notification: open it and
+enter a fresh SMS code to restore the connection. This is expected behaviour, not a bug.
 
 ## Usage
 
-Once configured, the integration will automatically retrieve and display your electricity consumption data in Home Assistant. You can create sensors to visualize this data on your dashboard.
+Once configured, the integration exposes daily and monthly consumption sensors — plus
+daily and monthly surplus sensors if you are a solar producer. It also writes long-term
+statistics, so you can add your consumption (and surplus) directly to the Home Assistant
+**Energy dashboard**.
 
 ## Disclaimer
 

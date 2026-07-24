@@ -7,15 +7,33 @@
           "username": "E-mail",
           "password": "Password"
         }
+      },
+      "otp": {
+        "title": "Verification code (SMS)",
+        "description": "A code has been sent by SMS to {mobile}.",
+        "data": {
+          "otp_code": "SMS code"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Reconnect Romande Énergie",
+        "data": {
+          "username": "E-mail",
+          "password": "Password"
+        }
       }
     },
     "error": {
       "invalid_auth": "Invalid credentials",
       "cannot_connect": "Cannot connect to API",
-      "no_contract": "No contract found"
+      "invalid_otp": "Invalid or expired code",
+      "no_contract": "No contract found",
+      "unknown": "Unexpected error"
     },
     "abort": {
-      "single_instance_allowed": "Only one instance is allowed"
+      "already_configured": "Account already configured",
+      "reauth_successful": "Re-authentication successful",
+      "unique_id_mismatch": "Please re-authenticate with the same account"
     }
   }
 }
