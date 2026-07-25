@@ -47,8 +47,11 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload entry; drop the service once the last entry is gone."""
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
-        hass.data[DOMAIN].pop(entry.entry_id)
-        if not hass.data[DOMAIN]:
-            hass.data.pop(DOMAIN)
+        # Mirrors the setdefault in async_setup_entry: an entry that never
+        # finished setting up leaves nothing to pop.
+        coordinators = hass.data.get(DOMAIN, {})
+        coordinators.pop(entry.entry_id, None)
+        if not coordinators:
+            hass.data.pop(DOMAIN, None)
             hass.services.async_remove(DOMAIN, SERVICE_UPDATE_NOW)
     return unload_ok

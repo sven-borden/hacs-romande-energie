@@ -9,12 +9,13 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from functools import partial
 
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.models import StatisticData, StatisticMetaData
 from homeassistant.components.recorder.statistics import (
     async_add_external_statistics,
-    get_last_statistics,
+    statistics_during_period,
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -40,6 +41,7 @@ from .const import (
     CURVE_TYPE_SURPLUS,
     DOMAIN,
     FETCH_DAYS,
+    STAT_BASELINE_LOOKBACK,
     TOKEN_EXP_MARGIN,
     TZ,
     UNIT_KWH,
@@ -47,6 +49,11 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _day_start(day: date) -> datetime:
+    """Local midnight of ``day`` — the statistic timestamp for that day."""
+    return datetime(day.year, day.month, day.day, tzinfo=TZ)
 
 
 def _calendar_month_total(series: list[DailyPoint], ref: date) -> float | None:
@@ -59,23 +66,31 @@ def _calendar_month_total(series: list[DailyPoint], ref: date) -> float | None:
     return round(sum(month), 4) if month else None
 
 
+def _settled(series: list[DailyPoint]) -> list[DailyPoint]:
+    """Drop the newest day of ``series``.
+
+    The portal syncs once a day, so its most recent day is still being filled
+    in and reads far too low until the next sync completes it. Only the days
+    behind it are final, so the daily sensors read from those.
+    """
+    return series[:-1]
+
+
 @dataclass(frozen=True)
 class RomandeEnergieData:
     """Snapshot handed to the sensors each poll.
 
     Pairing the value with its day in a single ``DailyPoint`` makes the
-    "value present but day missing" state unrepresentable.
+    "value present but day missing" state unrepresentable. ``consumption`` and
+    ``surplus`` are the newest *settled* day; the month totals cover every day
+    fetched, including the one still syncing.
     """
 
     consumption: DailyPoint | None
     consumption_month_total: float | None
     surplus: DailyPoint | None
     surplus_month_total: float | None
-
-    @property
-    def has_surplus(self) -> bool:
-        """True when the account reports surplus (solar) data."""
-        return self.surplus is not None
+    has_surplus: bool
 
 
 class RomandeEnergieCoordinator(DataUpdateCoordinator[RomandeEnergieData]):
@@ -156,17 +171,28 @@ class RomandeEnergieCoordinator(DataUpdateCoordinator[RomandeEnergieData]):
             _LOGGER.warning("Failed to write long-term statistics: %s", err)
 
         return RomandeEnergieData(
-            consumption=api.latest_value(cons),
+            consumption=api.latest_value(_settled(cons)),
             consumption_month_total=_calendar_month_total(cons, today),
-            surplus=api.latest_value(surp),
+            surplus=api.latest_value(_settled(surp)),
             surplus_month_total=_calendar_month_total(surp, today),
+            # Judged on the full series: a brand-new account whose only day is
+            # still syncing still has surplus.
+            has_surplus=bool(surp),
         )
 
     # ---- Statistics -------------------------------------------------------
     async def _insert_statistics(
         self, stat_id: str, name_suffix: str, series: list[DailyPoint]
     ) -> None:
-        """Append daily cumulative-sum statistics, skipping already-stored days."""
+        """Rewrite the whole fetched window as daily cumulative-sum statistics.
+
+        The portal syncs once a day, so a recent day is published with a partial
+        value and is completed by a later sync. Days already written must
+        therefore be re-sent with their corrected value, not skipped: external
+        statistics are keyed on ``start``, so re-sending updates them in place.
+        The cumulative sum is rebuilt from the sum stored just before the window
+        so the rewritten rows stay continuous with the older history.
+        """
         if not series:
             return
         metadata = StatisticMetaData(
@@ -177,32 +203,48 @@ class RomandeEnergieCoordinator(DataUpdateCoordinator[RomandeEnergieData]):
             statistic_id=stat_id,
             unit_of_measurement=UNIT_KWH,
         )
-        last = await get_instance(self.hass).async_add_executor_job(
-            get_last_statistics, self.hass, 1, stat_id, True, {"sum"}
-        )
-        running = 0.0
-        last_ts: float | None = None
-        prev = last.get(stat_id)
-        if prev:
-            # Only continue an existing series when we can read both its running
-            # sum and its last timestamp; otherwise emitting a fresh series would
-            # push the cumulative sum backwards (read as a meter reset).
-            prev_sum = prev[0].get("sum")
-            last_ts = prev[0].get("start")
-            if prev_sum is None or last_ts is None:
-                _LOGGER.warning(
-                    "Last %s statistic missing sum/start; skipping this cycle",
-                    stat_id,
-                )
-                return
-            running = float(prev_sum)
+        window_start = _day_start(series[0].day)
+        running = await self._sum_before(stat_id, window_start)
 
         points: list[StatisticData] = []
         for point in series:
-            start = datetime(point.day.year, point.day.month, point.day.day, tzinfo=TZ)
-            if last_ts is not None and start.timestamp() <= last_ts:
-                continue
             running += point.value
-            points.append(StatisticData(start=start, state=point.value, sum=running))
-        if points:
-            async_add_external_statistics(self.hass, metadata, points)
+            points.append(
+                StatisticData(
+                    start=_day_start(point.day), state=point.value, sum=running
+                )
+            )
+        async_add_external_statistics(self.hass, metadata, points)
+
+    async def _sum_before(self, stat_id: str, window_start: datetime) -> float:
+        """Return the cumulative sum stored for the last day before the window.
+
+        0.0 when nothing is stored before it — either a fresh install or a
+        history that starts inside the window, both of which start from zero.
+        The lookback is bounded so the query stays cheap; only an outage longer
+        than it could leave an older row unseen.
+        """
+        rows = await get_instance(self.hass).async_add_executor_job(
+            partial(
+                statistics_during_period,
+                self.hass,
+                window_start - STAT_BASELINE_LOOKBACK,
+                window_start,
+                {stat_id},
+                "hour",  # our points are daily; "hour" returns them unaggregated
+                None,
+                {"sum"},
+            )
+        )
+        stored = rows.get(stat_id) or []
+        if not stored:
+            return 0.0
+        last_sum = stored[-1].get("sum")
+        if last_sum is None:
+            _LOGGER.warning(
+                "Last %s statistic before %s has no sum; restarting from zero",
+                stat_id,
+                window_start.date(),
+            )
+            return 0.0
+        return float(last_sum)

@@ -33,9 +33,11 @@ class RomandeEnergieSensorEntityDescription(SensorEntityDescription):
 # state_class deliberately unset: external statistics carry the Energy-dashboard
 # history, so a state_class here would double-count.
 DESCRIPTIONS: tuple[RomandeEnergieSensorEntityDescription, ...] = (
+    # The keys stay as-is: they build the unique ids, so renaming them would
+    # orphan existing entities and their history.
     RomandeEnergieSensorEntityDescription(
         key="consumption_yesterday",
-        name="Consommation (veille)",
+        name="Consommation (jour)",
         device_class=SensorDeviceClass.ENERGY,
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         value_fn=lambda d: d.consumption.value if d.consumption else None,
@@ -50,7 +52,7 @@ DESCRIPTIONS: tuple[RomandeEnergieSensorEntityDescription, ...] = (
     ),
     RomandeEnergieSensorEntityDescription(
         key="surplus_yesterday",
-        name="Excédent (veille)",
+        name="Excédent (jour)",
         device_class=SensorDeviceClass.ENERGY,
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         surplus=True,
@@ -118,7 +120,11 @@ class RomandeEnergieSensor(
 
     @property
     def extra_state_attributes(self) -> dict[str, str] | None:
-        """Expose the measurement day (for the "veille" sensors that define day_fn)."""
+        """Expose the measured day (for the daily sensors, which define day_fn).
+
+        Which day that is depends on how far the portal has synced, so the
+        sensors state it rather than leaving it implied.
+        """
         day_fn = self.entity_description.day_fn
         data = self.coordinator.data
         if day_fn is None or data is None:

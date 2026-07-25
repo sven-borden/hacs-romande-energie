@@ -35,8 +35,21 @@ FAKE_CONTRACT_ID = "CONTRACT_TEST"
 FAKE_REFRESH_TOKEN = "REFRESH_TEST"
 
 
+@pytest.fixture
+def recorder_before_hass(request):
+    """Set up the recorder for tests marked ``recorder``, before ``hass`` exists.
+
+    The integration declares ``recorder`` as a dependency, so any test that
+    actually loads a config entry needs it. ``recorder_mock`` refuses to run
+    once ``hass`` exists, hence the ordering: the autouse fixture below takes
+    this one as its first argument so it always resolves first.
+    """
+    if "recorder" in request.keywords:
+        request.getfixturevalue("recorder_mock")
+
+
 @pytest.fixture(autouse=True)
-def auto_enable_custom_integrations(enable_custom_integrations):
+def auto_enable_custom_integrations(recorder_before_hass, enable_custom_integrations):
     """Enable loading of the custom integration for every test."""
     yield
 

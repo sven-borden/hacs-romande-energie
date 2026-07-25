@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import time
+from datetime import date
 from unittest.mock import AsyncMock
 
 import pytest
@@ -13,6 +14,7 @@ from homeassistant.helpers.update_coordinator import UpdateFailed
 from custom_components.romande_energie.api import (
     AuthError,
     CannotConnect,
+    DailyPoint,
     RefreshError,
     RomandeEnergieApiClient,
 )
@@ -130,8 +132,39 @@ async def test_update_survives_statistics_failure(
 
     assert isinstance(data, RomandeEnergieData)
     assert data.consumption is not None
-    assert data.consumption.value == 12.0  # latest non-null consumption day
-    assert data.consumption_month_total == 42.75
-    assert data.surplus.value == 3.25
+    # June 4 is the newest day in the fixture but is still syncing, so the
+    # daily sensors read the settled day behind it.
+    assert data.consumption == DailyPoint(date(2026, 6, 3), 9.25)
+    assert data.consumption_month_total == 42.75  # totals still count June 4
+    assert data.surplus == DailyPoint(date(2026, 6, 3), 0.0)
     assert data.surplus_month_total == 6.75
+    assert data.has_surplus is True
+
+
+async def test_update_reports_surplus_before_any_day_has_settled(
+    hass: HomeAssistant, config_entry, client, sample_curves
+) -> None:
+    """A single, still-syncing day leaves no settled value but is still surplus."""
+    coordinator = _make_coordinator(hass, config_entry, client)
+    one_day = [{**sample_curves[0], "timestamps": sample_curves[0]["timestamps"][:1]}]
+    one_day[0]["installations"] = [
+        {
+            "installation_id": "INST_TEST",
+            "curves": [
+                {"curve_type": "consumption", "unit": "kWh", "values": ["10.5"]},
+                {"curve_type": "surplus", "unit": "kWh", "values": ["2.0"]},
+            ],
+        }
+    ]
+    client.get_curves.return_value = one_day
+    coordinator._insert_statistics = AsyncMock()
+
+    with freeze_time("2026-06-15 12:00:00"):
+        coordinator._access_token = "still-valid"
+        coordinator._token_exp = int(time.time()) + 3600
+        data = await coordinator._async_update_data()
+
+    assert data.consumption is None
+    assert data.surplus is None
+    assert data.consumption_month_total == 10.5
     assert data.has_surplus is True

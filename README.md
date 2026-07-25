@@ -10,9 +10,9 @@ This repository contains the Romande Energie integration for Home Assistant, all
 - Automatically keeps the session alive by refreshing tokens (no repeated SMS codes)
 - Fetches daily electricity data from your smart meter
 - Entities:
-  - Daily consumption (yesterday, kWh)
+  - Daily consumption (kWh)
   - Monthly consumption total (kWh)
-  - Daily surplus (yesterday, kWh) — for solar producers
+  - Daily surplus (kWh) — for solar producers
   - Monthly surplus total (kWh) — for solar producers
 - Home Assistant Energy dashboard support via long-term statistics
 
@@ -52,6 +52,17 @@ Once configured, the integration exposes daily and monthly consumption sensors �
 daily and monthly surplus sensors if you are a solar producer. It also writes long-term
 statistics, so you can add your consumption (and surplus) directly to the Home Assistant
 **Energy dashboard**.
+
+### Which day the daily sensors show
+
+The portal syncs your meter roughly once a day, and the day it publishes last stays
+incomplete until the following sync fills it in. The daily sensors therefore show the
+most recent **fully synced** day rather than that partial one — typically the day before
+yesterday. The exact date is on each sensor as the `measurement_day` attribute.
+
+The Energy-dashboard statistics do include the day still syncing, and every poll rewrites
+the last 30 days, so a partial value is corrected automatically once the portal completes
+it. No action is needed on your side.
 
 ## Disclaimer
 
