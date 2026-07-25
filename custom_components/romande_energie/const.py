@@ -42,10 +42,6 @@ TOKEN_EXP_MARGIN = 60                       # Seconds before access-token expiry
 # OTP login is required.
 UPDATE_INTERVAL = timedelta(minutes=20)
 HTTP_TIMEOUT = 30                           # Seconds per request.
-# How far back the statistics writer looks for the cumulative-sum baseline that
-# precedes the fetched window. Bounded to keep the query cheap; only an outage
-# longer than this would hide the previous row and restart the sum from zero.
-STAT_BASELINE_LOOKBACK = timedelta(days=400)
 
 # Local time-zone for daily date boundaries and long-term-statistics timestamps.
 TZ = ZoneInfo("Europe/Zurich")

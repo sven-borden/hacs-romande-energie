@@ -56,13 +56,15 @@ statistics, so you can add your consumption (and surplus) directly to the Home A
 ### Which day the daily sensors show
 
 The portal syncs your meter roughly once a day, and the day it publishes last stays
-incomplete until the following sync fills it in. The daily sensors therefore show the
-most recent **fully synced** day rather than that partial one — typically the day before
-yesterday. The exact date is on each sensor as the `measurement_day` attribute.
+incomplete until the following sync fills it in. The daily sensors therefore skip that
+day and show the one behind it — usually the day before yesterday, later if the portal
+is lagging. Rather than assume, read the date off the `measurement_day` attribute on each
+**daily** sensor.
 
-The Energy-dashboard statistics do include the day still syncing, and every poll rewrites
-the last 30 days, so a partial value is corrected automatically once the portal completes
-it. No action is needed on your side.
+The Energy-dashboard statistics do include the day still syncing, and each poll re-sends
+the whole fetched window (about a month), so a partial value is corrected automatically
+once the portal republishes that day with its real total. No action is needed on your
+side.
 
 ## Disclaimer
 

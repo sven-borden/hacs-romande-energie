@@ -32,9 +32,12 @@ class RomandeEnergieSensorEntityDescription(SensorEntityDescription):
 
 # state_class deliberately unset: external statistics carry the Energy-dashboard
 # history, so a state_class here would double-count.
+#
+# The ``*_yesterday`` keys are misnomers now that the sensors report the newest
+# settled day, which is often older than yesterday. They stay anyway: the keys
+# build the unique ids (see ``_attr_unique_id``), so renaming them would orphan
+# every existing entity and its history.
 DESCRIPTIONS: tuple[RomandeEnergieSensorEntityDescription, ...] = (
-    # The keys stay as-is: they build the unique ids, so renaming them would
-    # orphan existing entities and their history.
     RomandeEnergieSensorEntityDescription(
         key="consumption_yesterday",
         name="Consommation (jour)",

@@ -72,7 +72,10 @@ def no_real_client_session():
 
     The API client is mocked in every test here, so a real session is never
     used — and building one spins up a DNS resolver whose background thread
-    outlives the test and trips the plugin's cleanup checks.
+    outlives the test and fails ``verify_cleanup``'s leftover-thread check.
+
+    ``config_flow`` imports the module rather than the function, so this patches
+    the shared ``homeassistant.helpers.aiohttp_client`` for the duration.
     """
     with patch(
         "custom_components.romande_energie.config_flow.aiohttp_client"

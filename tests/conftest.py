@@ -40,9 +40,13 @@ def recorder_before_hass(request):
     """Set up the recorder for tests marked ``recorder``, before ``hass`` exists.
 
     The integration declares ``recorder`` as a dependency, so any test that
-    actually loads a config entry needs it. ``recorder_mock`` refuses to run
-    once ``hass`` exists, hence the ordering: the autouse fixture below takes
-    this one as its first argument so it always resolves first.
+    loads a config entry or writes statistics needs it. ``recorder_db_url`` — a
+    transitive dependency of ``recorder_mock`` — asserts that the ``hass``
+    fixture has not started setting up, and ``enable_custom_integrations`` pulls
+    ``hass`` in. Hence the ordering: the autouse fixture below lists this one
+    first so it always resolves ahead of ``hass``.
+
+    Not to be confused with the plugin's own ``mock_recorder_before_hass``.
     """
     if "recorder" in request.keywords:
         request.getfixturevalue("recorder_mock")
