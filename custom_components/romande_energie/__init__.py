@@ -46,9 +46,25 @@ def _register_services(hass: HomeAssistant) -> None:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload entry; drop the service once the last entry is gone."""
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    if unload_ok:
-        hass.data[DOMAIN].pop(entry.entry_id)
-        if not hass.data[DOMAIN]:
-            hass.data.pop(DOMAIN)
-            hass.services.async_remove(DOMAIN, SERVICE_UPDATE_NOW)
-    return unload_ok
+    if not unload_ok:
+        _LOGGER.warning("Failed to unload %s for entry %s", PLATFORMS, entry.entry_id)
+        return False
+
+    coordinators = hass.data.get(DOMAIN)
+    if coordinators is None:
+        # async_setup_entry registers the coordinator before the entry can reach
+        # LOADED, and HA only calls this hook for LOADED entries — so the bucket
+        # missing means something else removed it. Say so instead of carrying on
+        # and dropping the service another entry may still be using.
+        _LOGGER.error(
+            "No coordinator registry while unloading %s; leaving the %s service alone",
+            entry.entry_id,
+            SERVICE_UPDATE_NOW,
+        )
+        return True
+
+    coordinators.pop(entry.entry_id, None)
+    if not coordinators:
+        hass.data.pop(DOMAIN, None)
+        hass.services.async_remove(DOMAIN, SERVICE_UPDATE_NOW)
+    return True

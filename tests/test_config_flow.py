@@ -1,8 +1,9 @@
 """Tests for the multi-step OTP config + reauth flow."""
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from homeassistant import config_entries
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import HomeAssistant
@@ -25,6 +26,9 @@ from .conftest import (
 
 _CLIENT_PATH = "custom_components.romande_energie.config_flow.RomandeEnergieApiClient"
 _SETUP_PATH = "custom_components.romande_energie.async_setup_entry"
+
+# Finishing a flow loads the entry, and the integration depends on the recorder.
+pytestmark = pytest.mark.recorder
 
 
 def _client_mock(
@@ -60,6 +64,25 @@ def _client_mock(
 
 def _patch_setup():
     return patch(_SETUP_PATH, new_callable=AsyncMock, return_value=True)
+
+
+@pytest.fixture(autouse=True)
+def no_real_client_session():
+    """Hand the flow a dummy aiohttp session.
+
+    The API client is mocked in every test here, so a real session is never
+    used — and building one spins up a DNS resolver whose background thread
+    outlives the test and fails ``verify_cleanup``'s leftover-thread check.
+
+    ``config_flow`` imports the module rather than the function, so this patches
+    the shared ``homeassistant.helpers.aiohttp_client`` for the duration.
+    """
+    with patch(
+        "custom_components.romande_energie.config_flow.aiohttp_client"
+        ".async_get_clientsession",
+        return_value=MagicMock(),
+    ):
+        yield
 
 
 # ---------------------------------------------------------------------------
