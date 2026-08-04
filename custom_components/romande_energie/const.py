@@ -41,6 +41,16 @@ TOKEN_EXP_MARGIN = 60                       # Seconds before access-token expiry
 # refresh token never lapses between polls); otherwise the session dies and a fresh
 # OTP login is required.
 UPDATE_INTERVAL = timedelta(minutes=20)
+# A failed poll does not rotate the refresh token, so waiting a whole
+# UPDATE_INTERVAL before trying again leaves a 40 min gap that outlives the ~30 min
+# refresh-token TTL — one network blip would then cost the user an SMS. The
+# coordinator falls back to this interval until a poll succeeds; two consecutive
+# retries still fit inside the TTL.
+POLL_RETRY_INTERVAL = timedelta(minutes=3)
+# A refresh that fails on transport (or a portal 5xx) is retried inside the same
+# poll, for the same reason: the refresh token is ageing while we wait.
+REFRESH_ATTEMPTS = 3
+REFRESH_RETRY_DELAY = 5                     # Seconds between refresh attempts.
 HTTP_TIMEOUT = 30                           # Seconds per request.
 
 # Local time-zone for daily date boundaries and long-term-statistics timestamps.

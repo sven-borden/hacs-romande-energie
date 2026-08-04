@@ -11,14 +11,21 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
+from custom_components.romande_energie import coordinator as coordinator_module
 from custom_components.romande_energie.api import (
+    ApiError,
     AuthError,
     CannotConnect,
     DailyPoint,
     RefreshError,
     RomandeEnergieApiClient,
 )
-from custom_components.romande_energie.const import CONF_REFRESH_TOKEN
+from custom_components.romande_energie.const import (
+    CONF_REFRESH_TOKEN,
+    POLL_RETRY_INTERVAL,
+    REFRESH_ATTEMPTS,
+    UPDATE_INTERVAL,
+)
 from custom_components.romande_energie.coordinator import (
     RomandeEnergieCoordinator,
     RomandeEnergieData,
@@ -41,6 +48,12 @@ def _make_coordinator(hass, entry, client) -> RomandeEnergieCoordinator:
 def client() -> AsyncMock:
     """An async mock standing in for the real API client."""
     return AsyncMock(spec=RomandeEnergieApiClient)
+
+
+@pytest.fixture(autouse=True)
+def no_refresh_delay(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Drop the wait between refresh attempts so retry tests stay instant."""
+    monkeypatch.setattr(coordinator_module, "REFRESH_RETRY_DELAY", 0)
 
 
 # ---------------------------------------------------------------------------
@@ -87,6 +100,41 @@ async def test_ensure_token_refresh_error_raises_auth_failed(
     with pytest.raises(ConfigEntryAuthFailed):
         await coordinator._ensure_token()
 
+    # A rejected refresh token is dead: retrying only delays the reauth flow.
+    assert client.refresh.await_count == 1
+
+
+@pytest.mark.parametrize("error", [CannotConnect("network down"), ApiError("HTTP 502")])
+async def test_ensure_token_retries_a_lost_refresh(
+    hass: HomeAssistant, config_entry, client, error: Exception
+) -> None:
+    """One blip must not strand the refresh token until the next poll."""
+    coordinator = _make_coordinator(hass, config_entry, client)
+    new_access = make_jwt("ACCT_TEST", exp=int(time.time()) + 3600)
+    client.refresh.side_effect = [
+        error,
+        {"access_token": new_access, "refresh_token": "REFRESH_ROTATED"},
+    ]
+
+    await coordinator._ensure_token()
+
+    assert client.refresh.await_count == 2
+    assert coordinator._access_token == new_access
+    assert config_entry.data[CONF_REFRESH_TOKEN] == "REFRESH_ROTATED"
+
+
+async def test_ensure_token_gives_up_after_the_attempt_budget(
+    hass: HomeAssistant, config_entry, client
+) -> None:
+    """A lasting outage surfaces as UpdateFailed, not an endless retry loop."""
+    coordinator = _make_coordinator(hass, config_entry, client)
+    client.refresh.side_effect = CannotConnect("network down")
+
+    with pytest.raises(CannotConnect):
+        await coordinator._ensure_token()
+
+    assert client.refresh.await_count == REFRESH_ATTEMPTS
+
 
 # ---------------------------------------------------------------------------
 # _async_update_data
@@ -102,6 +150,9 @@ async def test_update_auth_error_maps_to_auth_failed(
     with pytest.raises(ConfigEntryAuthFailed):
         await coordinator._async_update_data()
 
+    # Reauth stops the polling, so there is no point shortening the interval.
+    assert coordinator.update_interval == UPDATE_INTERVAL
+
 
 async def test_update_cannot_connect_maps_to_update_failed(
     hass: HomeAssistant, config_entry, client
@@ -113,6 +164,26 @@ async def test_update_cannot_connect_maps_to_update_failed(
 
     with pytest.raises(UpdateFailed):
         await coordinator._async_update_data()
+
+    # A failed poll leaves the refresh token un-rotated, so the next attempt has
+    # to land well inside its ~30 min TTL rather than a whole interval later.
+    assert coordinator.update_interval == POLL_RETRY_INTERVAL
+
+
+async def test_successful_update_restores_the_poll_interval(
+    hass: HomeAssistant, config_entry, client, sample_curves
+) -> None:
+    coordinator = _make_coordinator(hass, config_entry, client)
+    coordinator.update_interval = POLL_RETRY_INTERVAL  # as a previous failure left it
+    client.get_curves.return_value = sample_curves
+    coordinator._insert_statistics = AsyncMock()
+
+    with freeze_time("2026-06-05 12:00:00"):
+        coordinator._access_token = "still-valid"
+        coordinator._token_exp = int(time.time()) + 3600
+        await coordinator._async_update_data()
+
+    assert coordinator.update_interval == UPDATE_INTERVAL
 
 
 async def test_update_survives_statistics_failure(

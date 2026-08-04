@@ -7,10 +7,12 @@ totals to the sensors.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from functools import partial
+from typing import Any
 
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.models import StatisticData, StatisticMetaData
@@ -44,6 +46,9 @@ from .const import (
     CURVE_TYPE_SURPLUS,
     DOMAIN,
     FETCH_DAYS,
+    POLL_RETRY_INTERVAL,
+    REFRESH_ATTEMPTS,
+    REFRESH_RETRY_DELAY,
     TOKEN_EXP_MARGIN,
     TZ,
     UNIT_KWH,
@@ -164,14 +169,45 @@ class RomandeEnergieCoordinator(DataUpdateCoordinator[RomandeEnergieData]):
         now = datetime.now(tz=TZ).timestamp()
         if self._access_token and self._token_exp - now > TOKEN_EXP_MARGIN:
             return
-        try:
-            tokens = await self.client.refresh(self._refresh_token)
-        except RefreshError as err:  # refresh token dead -> HA reauth (fresh OTP)
-            raise ConfigEntryAuthFailed(str(err)) from err
+        tokens = await self._refresh_tokens()
         self._access_token = tokens["access_token"]
         self._refresh_token = tokens["refresh_token"]
         self._token_exp = api.token_expiry(self._access_token)
         await self._persist_refresh_token()  # rotate: save the new refresh token
+
+    async def _refresh_tokens(self) -> dict[str, Any]:
+        """Rotate the session, retrying a refresh that never got an answer.
+
+        The refresh token expires ~30 min after the rotation that issued it, and
+        only a successful refresh renews it. Giving up on the first transport
+        failure or portal 5xx means the next attempt is a whole poll interval
+        later, which can land past that TTL — the user then has to re-enter an SMS
+        code because of one blip. Retrying inside the poll keeps the ageing window
+        short.
+
+        A ``RefreshError`` is not retried: the portal has already rejected the
+        token, so further attempts only delay the reauth flow. Note a refresh that
+        *timed out* may still have rotated the token server-side, in which case
+        the retry sends a token the portal has burned and gets that same
+        ``RefreshError`` — unrecoverable either way, since the replacement was in
+        the answer we never received.
+        """
+        for _ in range(REFRESH_ATTEMPTS - 1):
+            try:
+                return await self._refresh_once()
+            except (CannotConnect, ApiError) as err:
+                _LOGGER.debug(
+                    "Token refresh failed (%s); retrying in %s s", err, REFRESH_RETRY_DELAY
+                )
+                await asyncio.sleep(REFRESH_RETRY_DELAY)
+        return await self._refresh_once()  # last attempt: let the failure surface
+
+    async def _refresh_once(self) -> dict[str, Any]:
+        """One refresh call, with a dead refresh token mapped to HA reauth."""
+        try:
+            return await self.client.refresh(self._refresh_token)
+        except RefreshError as err:  # refresh token dead -> HA reauth (fresh OTP)
+            raise ConfigEntryAuthFailed(str(err)) from err
 
     async def _persist_refresh_token(self) -> None:
         """Store the rotated refresh token back on the config entry."""
@@ -181,6 +217,26 @@ class RomandeEnergieCoordinator(DataUpdateCoordinator[RomandeEnergieData]):
 
     # ---- Poll -------------------------------------------------------------
     async def _async_update_data(self) -> RomandeEnergieData:
+        """Poll, coming back sooner than usual while polls are failing.
+
+        Only a successful poll rotates the refresh token, so a failed one starts
+        a clock: wait the full UPDATE_INTERVAL and the gap since the last rotation
+        reaches 40 min, outliving the ~30 min refresh-token TTL and costing the
+        user an SMS. Retrying on POLL_RETRY_INTERVAL keeps several attempts inside
+        the TTL, so a transient outage no longer ends the session. An expired
+        refresh token raises ConfigEntryAuthFailed instead, which stops the
+        polling altogether — no interval to tune there.
+        """
+        try:
+            data = await self._poll()
+        except UpdateFailed:
+            self.update_interval = POLL_RETRY_INTERVAL
+            raise
+        self.update_interval = UPDATE_INTERVAL
+        return data
+
+    async def _poll(self) -> RomandeEnergieData:
+        """Fetch the rolling window and build the snapshot for the sensors."""
         try:
             await self._ensure_token()
             today = datetime.now(tz=TZ).date()

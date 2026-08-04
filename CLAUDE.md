@@ -56,6 +56,20 @@ do not raise it. Each refresh rotates the refresh token, so
 losing that write costs the user an OTP. A `RefreshError` becomes
 `ConfigEntryAuthFailed` → HA reauth flow.
 
+Only a *successful* refresh renews the refresh token, so a missed poll is what
+actually ends sessions: 20 min + 20 min outlives the 30 min TTL. Two guards keep
+the chain alive, and both exist for that arithmetic alone:
+
+- `_refresh_tokens()` retries `CannotConnect`/`ApiError` `REFRESH_ATTEMPTS` times
+  inside the same poll (`RefreshError` is *not* retried — the token is already
+  dead). A timed-out refresh may have rotated server-side, so the retry can still
+  legitimately end in `RefreshError`; that one is unrecoverable.
+- `_async_update_data()` drops `update_interval` to `POLL_RETRY_INTERVAL` (3 min)
+  after an `UpdateFailed` and restores `UPDATE_INTERVAL` on the next success, so a
+  transient outage gets several attempts inside the TTL. The
+  `ConfigEntryAuthFailed` path deliberately leaves the interval alone (reauth stops
+  the polling anyway).
+
 Note `REFRESH_ENDPOINT` is bare `/v2/refresh/`, not `/login/refresh/` (404).
 All endpoint paths use trailing slashes.
 
